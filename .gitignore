@@ -1,0 +1,13 @@
+# Bỏ qua thư mục chứa Data
+data/
+*.zip
+
+# Bỏ qua các file rác của Python và Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Bỏ qua thư mục môi trường ảo (nếu có)
+venv/
+env/
+.env
