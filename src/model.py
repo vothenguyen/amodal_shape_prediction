@@ -2,71 +2,126 @@ import torch
 import torch.nn as nn
 import timm
 
+# --- CÁC KHỐI XÂY DỰNG CHỨC NĂNG (BUILDING BLOCKS) ---
 
-class AmodalSwinUNet(nn.Module):
-    def __init__(self):
+# 1. Khối Chập Kép (Double Convolution) - Linh hồn của U-Net
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
-        print("Đang khởi tạo bộ não Swin Transformer 4-Channel...")
-
-        # 1. Tải mô hình Swin Transformer gốc (đã train sẵn siêu xịn trên ImageNet)
-        # Dùng bản 'tiny' cho nhẹ máy dễ train, patch_size=4
-        self.encoder = timm.create_model(
-            "swin_tiny_patch4_window7_224", pretrained=True
-        )
-
-        # 2. PHẪU THUẬT LỚP ĐẦU VÀO (3 KÊNH -> 4 KÊNH)
-        # Lấy lớp Convolution đầu tiên của Swin ra
-        old_conv = self.encoder.patch_embed.proj
-
-        # Tạo một lớp Conv mới y hệt, nhưng nhận in_channels = 4
-        new_conv = nn.Conv2d(
-            in_channels=4,
-            out_channels=old_conv.out_channels,
-            kernel_size=old_conv.kernel_size,
-            stride=old_conv.stride,
-            padding=old_conv.padding,
-        )
-
-        # COPY TRỌNG SỐ (Bí kíp để AI không bị ngu đi)
-        with torch.no_grad():
-            # Giữ nguyên kiến thức 3 kênh RGB gốc
-            new_conv.weight[:, :3, :, :] = old_conv.weight
-            # Kênh thứ 4 (Visible Mask), ta lấy trung bình cộng của 3 kênh kia làm giá trị khởi tạo
-            new_conv.weight[:, 3, :, :] = old_conv.weight.mean(dim=1)
-            new_conv.bias = old_conv.bias
-
-        # Tráo lớp mới vào mô hình, vứt lớp cũ đi
-        self.encoder.patch_embed.proj = new_conv
-
-        # Xóa lớp classification head gốc (vì mình làm Segmentation chứ không phân loại ảnh)
-        self.encoder.head = nn.Identity()
-
-        # 3. XÂY DỰNG DECODER (Giải mã ngược từ não AI ra lại bức ảnh Mask)
-        # Swin Tiny sẽ nén ảnh 256x256 xuống thành một ma trận đặc cỡ 8x8 với 768 features.
-        # Tụi mình cần cái Decoder để phóng to nó ngược lại thành kích thước 256x256
-        self.decoder = nn.Sequential(
-            nn.Conv2d(768, 256, kernel_size=3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-            # Phóng to x4 lần (lên 32x32)
-            nn.Upsample(scale_factor=4, mode="bilinear", align_corners=False),
-            nn.Conv2d(256, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            # Phóng to x8 lần nữa (lên đúng 256x256)
-            nn.Upsample(scale_factor=8, mode="bilinear", align_corners=False),
-            # Ép về 1 kênh duy nhất: Bức ảnh Amodal Mask trắng đen!
-            nn.Conv2d(64, 1, kernel_size=1),
+        self.double_conv = nn.Sequential(
+            # Lớp chập 1
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels), # Chuẩn hóa để train nhanh hơn
+            nn.ReLU(inplace=True),        # Hàm kích hoạt ReLU
+            # Lớp chập 2 (Làm mượt nét vẽ)
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
         )
 
     def forward(self, x):
-        # 1. Rút trích đặc trưng bằng Swin
-        features = self.encoder.forward_features(x)
+        return self.double_conv(x)
 
-        # 2. Định dạng lại: Từ (Batch, H, W, Channels) -> (Batch, Channels, H, W)
-        # Bằng cách chuyển vị trí Channel (số 3) lên trước H và W (số 1 và 2)
-        features = features.permute(0, 3, 1, 2)
+# 2. Khối Phóng To (Up-sampling) có kẹp Skip Connections
+class UpBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        # Dùng ConvTranspose2d để phóng to x2, giữ lại thông tin không gian
+        self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+        # Khối Chập Kép để xử lý sau khi kẹp (Concat)
+        self.conv = DoubleConv(in_channels, out_channels)
 
-        # 3. Bơm qua ống Decoder
-        out = self.decoder(features)
-        return out
+    def forward(self, x_decoder, x_skip):
+        # Bước 1: Phóng to bức ảnh từ Decoder
+        x_up = self.up(x_decoder)
+        
+        # Bước 2: KẸP (CONCAT) - Đây là bí thuật U-Net!
+        # Kẹp bức ảnh mờ mờ vừa phóng to (x_up) với 
+        # bức ảnh chi tiết sắc nét từ Encoder (x_skip) theo chiều kênh màu
+        x_concat = torch.cat([x_skip, x_up], dim=1)
+        
+        # Bước 3: Đưa qua khối chập kép để vẽ lại nét mượt mà
+        return self.conv(x_concat)
+
+
+# --- MÔ HÌNH CHÍNH (MAIN MODEL) ---
+
+class AmodalSwinUNet(nn.Module):
+    def __init__(self, model_name='swin_tiny_patch4_window7_224', pretrained=True):
+        super().__init__()
+        
+        # 1. ENCODER: Swin Transformer (Vẫn giữ nguyên như bản cũ)
+        self.encoder = timm.create_model(model_name, pretrained=pretrained, features_only=True)
+        
+        # Độ lại lớp Patch Embedding đầu vào (vẫn 4 kênh như cũ)
+        pretrained_patch_embed = self.encoder.patch_embed.proj.weight
+        self.encoder.patch_embed.proj = nn.Conv2d(4, 96, kernel_size=4, stride=4)
+        with torch.no_grad():
+            self.encoder.patch_embed.proj.weight[:, :3, :, :] = pretrained_patch_embed
+            self.encoder.patch_embed.proj.weight[:, 3, :, :] = torch.zeros_like(pretrained_patch_embed[:, 0, :, :])
+
+        # Các kênh đầu ra của Swin Tiny: [96, 192, 384, 768] (Bản đồ đặc trưng từ to đến bé)
+        self.encoder_channels = self.encoder.feature_info.channels() 
+        
+        # 2. DECODER: U-Net Xịn (Nâng cấp nằm ở đây!)
+        
+        # Khối 1: Phóng to từ 7x7 (kênh 768) lên 14x14, kẹp với 14x14 (kênh 384)
+        self.up1 = UpBlock(768, 384) 
+        # Khối 2: Phóng to từ 14x14 (kênh 384) lên 28x28, kẹp với 28x28 (kênh 192)
+        self.up2 = UpBlock(384, 192) 
+        # Khối 3: Phóng to từ 28x28 (kênh 192) lên 56x56, kẹp với 56x56 (kênh 96)
+        self.up3 = UpBlock(192, 96)  
+        
+        # Khối 4: Phóng to cuối cùng từ 56x56 lên 224x224 (Kéo giãn 4 lần bằng Bilinear)
+        self.up_final = nn.Sequential(
+            nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True),
+            nn.Conv2d(96, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True)
+        )
+        
+        # 3. LỚP RA CUỐI CÙNG (Segmentation Head): Vẽ ra Mask nhị phân
+        self.segmentation_head = nn.Conv2d(64, 1, kernel_size=1)
+
+    def forward(self, x):
+        # --- PHASE 1: ENCODER (Đi xuống - Rút trích đặc trưng) ---
+        skip_connections = self.encoder(x)
+        
+        # 🚨 FIX LỖI Ở ĐÂY: Nắn lại xương cho Swin Transformer!
+        # Swin nhả ra [Batch, H, W, Channels], Conv2d của U-Net lại cần [Batch, Channels, H, W]
+        # Mình dùng permute(0, 3, 1, 2) để đảo chiều Channels lên đúng vị trí
+        formatted_skips = []
+        for skip in skip_connections:
+            formatted_skips.append(skip.permute(0, 3, 1, 2))
+
+        # formatted_skips[0] -> 56x56 (kênh 96) 
+        # formatted_skips[1] -> 28x28 (kênh 192)
+        # formatted_skips[2] -> 14x14 (kênh 384)
+        # formatted_skips[3] -> 7x7 (kênh 768) 
+
+        # Bức ảnh bé tí, mờ nhất nằm ở cuối cùng
+        x_bottleneck = formatted_skips[3] 
+
+        # --- PHASE 2: DECODER (Đi lên - Phóng to và giữ chi tiết) ---
+        # Phóng to và kẹp với các "mật lệnh" chi tiết tương ứng
+        x_decoder = self.up1(x_bottleneck, formatted_skips[2]) # Lên 14x14
+        x_decoder = self.up2(x_decoder, formatted_skips[1])    # Lên 28x28
+        x_decoder = self.up3(x_decoder, formatted_skips[0])    # Lên 56x56
+        
+        # Phóng to cuối cùng về kích thước ảnh gốc 224x224
+        x_upsampled = self.up_final(x_decoder)
+
+        # --- PHASE 3: RA KẾT QUẢ ---
+        return self.segmentation_head(x_upsampled)
+
+
+if __name__ == "__main__":
+    # Test nhanh cấu trúc mô hình
+    model = AmodalSwinUNet()
+    # Tạo dữ liệu giả: 2 ảnh, 4 kênh, 224x224
+    dummy_input = torch.randn(2, 4, 224, 224) 
+    with torch.no_grad():
+        output = model(dummy_input)
+    print(f"Kiến trúc U-Net đã OK!")
+    print(f"Đầu vào: {dummy_input.shape}")
+    print(f"Đầu ra: {output.shape} (Phải là 2x1x224x224)")

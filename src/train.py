@@ -45,7 +45,7 @@ class BCEDiceLoss(nn.Module):
 
 def train():
     BATCH_SIZE = 4
-    EPOCHS = 10  # Test thử 10 epoch ở máy tính, lên Colab nhớ chỉnh lên 50 nhé!
+    EPOCHS = 50  # Test thử 10 epoch ở máy tính, lên Colab nhớ chỉnh lên 50 nhé!
     LEARNING_RATE = 1e-4
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
