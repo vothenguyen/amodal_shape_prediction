@@ -11,25 +11,32 @@ from dataset import AmodalDataset
 from model import AmodalSwinUNet
 
 
-# ==========================================
-# VŨ KHÍ 1: HÀM CHẤM ĐIỂM KÉP (BCE + DICE LOSS)
-# ==========================================
-class BCEDiceLoss(nn.Module):
-    def __init__(self):
+class OcclusionAwareLoss(nn.Module):
+    def __init__(self, occlusion_weight=5.0):  # THƯỞNG X5 ĐIỂM!!!
         super().__init__()
-        self.bce = nn.BCEWithLogitsLoss()
+        # Để reduction='none' để lát mình tự nhân trọng số từng pixel
+        self.bce = nn.BCEWithLogitsLoss(reduction="none")
+        self.occlusion_weight = occlusion_weight
 
-    def forward(self, pred, target):
+    def forward(self, pred, target, occluded_region):
+        # 1. Chấm điểm BCE cho từng điểm ảnh
         bce_loss = self.bce(pred, target)
+
+        # 2. LUẬT MỚI: Ma trận trọng số
+        weight_matrix = torch.ones_like(target)  # Mặc định mọi pixel nhân 1
+        # Những pixel nào nằm trong vùng bị khuất -> Đẩy trọng số lên x5!
+        weight_matrix[occluded_region > 0.5] = self.occlusion_weight
+
+        # 3. Nhân trọng số vào Loss và tính trung bình
+        weighted_bce = (bce_loss * weight_matrix).mean()
+
+        # 4. Dice Loss (Vẫn giữ để tổng thể mượt mà)
         pred_prob = torch.sigmoid(pred)
-        pred_flat = pred_prob.view(-1)
-        target_flat = target.view(-1)
-        intersection = (pred_flat * target_flat).sum()
-        dice_score = (2.0 * intersection + 1e-6) / (
-            pred_flat.sum() + target_flat.sum() + 1e-6
-        )
-        dice_loss = 1.0 - dice_score
-        return bce_loss + dice_loss
+        intersection = (pred_prob * target).sum(dim=(2, 3))
+        union = pred_prob.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
+        dice_loss = 1.0 - (2.0 * intersection + 1e-6) / (union + 1e-6)
+
+        return weighted_bce + dice_loss.mean()
 
 
 def train():
@@ -70,7 +77,7 @@ def train():
         print(f"\n🔄 HỒI SINH THÀNH CÔNG: Đã nạp lại 'bộ não' từ Epoch {RESUME_EPOCH}!")
     # -------------------------------
 
-    criterion = BCEDiceLoss()
+    criterion = OcclusionAwareLoss(occlusion_weight=5.0)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     os.makedirs("../checkpoints", exist_ok=True)
@@ -82,14 +89,16 @@ def train():
 
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
 
-        for inputs, targets in progress_bar:
+        for inputs, targets, occluded_region in progress_bar:
             inputs = inputs.to(DEVICE)
             targets = targets.unsqueeze(1).float().to(DEVICE)
+            occluded_region = occluded_region.unsqueeze(1).float().to(DEVICE)
 
             optimizer.zero_grad()
             outputs = model(inputs)
-            loss = criterion(outputs, targets)
+            loss = criterion(outputs, targets, occluded_region)
             loss.backward()
+
             optimizer.step()
 
             total_loss += loss.item()

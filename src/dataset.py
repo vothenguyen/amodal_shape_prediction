@@ -101,4 +101,19 @@ class AmodalDataset(Dataset):
         amodal_target = torch.from_numpy(amodal_mask).long()
 
         # Nhả ra cho PyTorch: (Input 4 Kênh, Output 1 Kênh)
-        return input_4channel, amodal_target
+        occluded_region = torch.clamp(amodal_mask - visible_mask, min=0.0)
+
+        # 2. KÊNH THỨ 5: Tìm "Viền đứt gãy" (Edge Mask) bằng Toán học hình thái (Morphology)
+        visible_np = visible_mask.numpy()
+        kernel = np.ones((5, 5), np.uint8)  # Dùng ma trận 5x5 để làm viền dày lên xíu
+        dilation = cv2.dilate(visible_np, kernel, iterations=1)
+        erosion = cv2.erode(visible_np, kernel, iterations=1)
+        edge_mask = torch.tensor(dilation - erosion, dtype=torch.float32)
+
+        # 3. Ghép thành Input 5 Kênh (3 màu + 1 Visible + 1 Viền đứt gãy)
+        input_tensor = torch.cat(
+            [img_tensor, visible_mask.unsqueeze(0), edge_mask.unsqueeze(0)], dim=0
+        )
+
+        # Trả về 3 món: Ảnh 5 kênh, Đáp án Amodal, và Vùng bị khuất (để tính điểm)
+        return input_tensor, amodal_mask, occluded_region
