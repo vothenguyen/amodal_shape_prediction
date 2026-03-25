@@ -58,16 +58,12 @@ class AmodalDataset(Dataset):
                     poly_2d = np.array(poly).reshape(-1, 2).astype(np.int32)
                     cv2.fillPoly(amodal_mask, [poly_2d], 1)
 
-        # 4. TẠO VISIBLE MASK (Kênh thứ 4) BẰNG CÁCH "GỌT" MASK
-        # Copy từ Amodal Mask làm gốc
+        # 4. TẠO VISIBLE MASK BẰNG CÁCH "GỌT" MASK
         visible_mask = amodal_mask.copy()
         target_order = target_region.get("order", 0)
 
-        # Duyệt qua các vật thể khác CÙNG BỨC ẢNH
         for other_region in ann["regions"]:
             other_order = other_region.get("order", 0)
-
-            # Giả định: order NHỎ HƠN nghĩa là nằm TRƯỚC (đè lên vật thể của mình)
             if other_order < target_order and "segmentation" in other_region:
                 other_segs = other_region["segmentation"]
                 if isinstance(other_segs, list) and len(other_segs) > 0:
@@ -76,44 +72,41 @@ class AmodalDataset(Dataset):
                     for poly in other_segs:
                         if len(poly) >= 6:
                             poly_2d = np.array(poly).reshape(-1, 2).astype(np.int32)
-                            # Tô màu đen (0) đè lên để XÓA phần bị che khuất
                             cv2.fillPoly(visible_mask, [poly_2d], 0)
 
-        # 5. Đưa qua hàm Resize (về 224x224)
+        # 5. Data Augmentation (Albumentations)
         if self.transform:
-            # Truyền cùng lúc cả 2 mask vào để cắt ghép cho đồng bộ
             transformed = self.transform(image=image, masks=[amodal_mask, visible_mask])
             image = transformed["image"]
             amodal_mask = transformed["masks"][0]
             visible_mask = transformed["masks"][1]
 
-        # 6. ÉP KIỂU VÀ GHÉP THÀNH TENSOR 4 KÊNH
-        # Ảnh RGB: [H, W, 3] -> [3, H, W]
+        # ========================================================
+        # 6. KHÚC CHUYỂN ĐỔI CHUẨN XÁC GIỮA NUMPY VÀ PYTORCH
+        # ========================================================
+        
+        # Ép Ảnh RGB về Tensor
         image_tensor = torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
 
-        # Visible Mask: [H, W] -> Thêm chiều thành [1, H, W]
-        visible_tensor = torch.from_numpy(visible_mask).float().unsqueeze(0)
+        # Ép Mask về Tensor
+        amodal_tensor = torch.from_numpy(amodal_mask).float()
+        visible_tensor = torch.from_numpy(visible_mask).float()
 
-        # SIÊU HỢP THỂ: Nối 3 kênh RGB và 1 kênh Visible lại -> [4, H, W]
-        input_4channel = torch.cat([image_tensor, visible_tensor], dim=0)
+        # Tính Vùng bị khuất bằng Tensor
+        occluded_region = torch.clamp(amodal_tensor - visible_tensor, min=0.0)
 
-        # Amodal Mask (Nhãn dán): [H, W] (Giữ nguyên dùng để tính loss)
-        amodal_target = torch.from_numpy(amodal_mask).long()
+        # TẠO KÊNH 5: Tính Edge Mask bằng OpenCV (yêu cầu Numpy uint8)
+        visible_uint8 = (visible_mask * 255).astype(np.uint8) 
+        kernel = np.ones((5, 5), np.uint8)
+        dilation = cv2.dilate(visible_uint8, kernel, iterations=1)
+        erosion = cv2.erode(visible_uint8, kernel, iterations=1)
+        edge_mask = torch.tensor((dilation - erosion) / 255.0, dtype=torch.float32)
 
-        # Nhả ra cho PyTorch: (Input 4 Kênh, Output 1 Kênh)
-        occluded_region = torch.clamp(amodal_mask - visible_mask, min=0.0)
+        # SIÊU HỢP THỂ 5 KÊNH: RGB (3) + Visible (1) + Edge (1)
+        input_tensor = torch.cat([
+            image_tensor, 
+            visible_tensor.unsqueeze(0), 
+            edge_mask.unsqueeze(0)
+        ], dim=0)
 
-        # 2. KÊNH THỨ 5: Tìm "Viền đứt gãy" (Edge Mask) bằng Toán học hình thái (Morphology)
-        visible_np = visible_mask.numpy()
-        kernel = np.ones((5, 5), np.uint8)  # Dùng ma trận 5x5 để làm viền dày lên xíu
-        dilation = cv2.dilate(visible_np, kernel, iterations=1)
-        erosion = cv2.erode(visible_np, kernel, iterations=1)
-        edge_mask = torch.tensor(dilation - erosion, dtype=torch.float32)
-
-        # 3. Ghép thành Input 5 Kênh (3 màu + 1 Visible + 1 Viền đứt gãy)
-        input_tensor = torch.cat(
-            [img_tensor, visible_mask.unsqueeze(0), edge_mask.unsqueeze(0)], dim=0
-        )
-
-        # Trả về 3 món: Ảnh 5 kênh, Đáp án Amodal, và Vùng bị khuất (để tính điểm)
-        return input_tensor, amodal_mask, occluded_region
+        return input_tensor, amodal_tensor, occluded_region

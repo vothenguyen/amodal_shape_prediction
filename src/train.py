@@ -41,7 +41,7 @@ class OcclusionAwareLoss(nn.Module):
 
 def train():
     BATCH_SIZE = 4
-    EPOCHS = 50
+    EPOCHS = 15
     RESUME_EPOCH = 0  # Bắt đầu lại từ con số 0 với não U-Net mới
     LEARNING_RATE = 1e-4
 
