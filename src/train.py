@@ -42,7 +42,7 @@ class OcclusionAwareLoss(nn.Module):
 def train():
     BATCH_SIZE = 4
     EPOCHS = 15
-    RESUME_EPOCH = 0  # Bắt đầu lại từ con số 0 với não U-Net mới
+    RESUME_EPOCH = 6  # Bắt đầu lại từ con số 0 với não U-Net mới
     LEARNING_RATE = 1e-4
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
