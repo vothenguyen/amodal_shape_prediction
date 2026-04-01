@@ -1,8 +1,28 @@
 import torch
 import torch.nn as nn
 import timm
+import torchvision.models as models
+
 
 # --- CÁC KHỐI XÂY DỰNG CHỨC NĂNG (BUILDING BLOCKS) ---
+# ==========================================
+# TẶNG KÈM 1: MẮT THẦN KHÔNG GIAN (SPATIAL ATTENTION)
+# Khối này giúp AI dồn sự chú ý vào đường viền vật thể, phớt lờ phông nền
+# ==========================================
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super().__init__()
+        assert kernel_size in (3, 7), "Kernel size must be 3 or 7"
+        padding = 3 if kernel_size == 7 else 1
+        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x_cat = torch.cat([avg_out, max_out], dim=1)
+        scale = self.sigmoid(self.conv1(x_cat))
+        return x * scale
 
 
 # 1. Khối Chập Kép (Double Convolution) - Linh hồn của U-Net
@@ -73,7 +93,7 @@ class AmodalSwinUNet(nn.Module):
 
         # Các kênh đầu ra của Swin Tiny: [96, 192, 384, 768] (Bản đồ đặc trưng từ to đến bé)
         self.encoder_channels = self.encoder.feature_info.channels()
-
+        self.spatial_attention = SpatialAttention(kernel_size=7)
         # 2. DECODER: U-Net Xịn (Nâng cấp nằm ở đây!)
 
         # Khối 1: Phóng to từ 7x7 (kênh 768) lên 14x14, kẹp với 14x14 (kênh 384)
@@ -93,6 +113,7 @@ class AmodalSwinUNet(nn.Module):
 
         # 3. LỚP RA CUỐI CÙNG (Segmentation Head): Vẽ ra Mask nhị phân
         self.segmentation_head = nn.Conv2d(64, 1, kernel_size=1)
+        self.final_conv = nn.Conv2d(64, 1, kernel_size=1)
 
     def forward(self, x):
         # --- PHASE 1: ENCODER (Đi xuống - Rút trích đặc trưng) ---
