@@ -108,5 +108,6 @@ class AmodalDataset(Dataset):
             visible_tensor.unsqueeze(0), 
             edge_mask.unsqueeze(0)
         ], dim=0)
+        cat_id = ann['category_id']
 
-        return input_tensor, amodal_tensor, occluded_region
+        return input_tensor, amodal_tensor, occluded_region, torch.tensor(cat_id, dtype=torch.long)
