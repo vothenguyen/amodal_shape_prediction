@@ -1,13 +1,23 @@
-# Bỏ qua thư mục chứa Data
+# 1. CHẶN BOM NẶNG KÝ (QUAN TRỌNG NHẤT KHÔNG ĐƯỢC QUÊN)
+checkpoints/
+*.pth
+*.pt
+*.weights
+
+# 2. BỎ QUA DATASET VÀ FILE NÉN
 data/
 *.zip
+*.tar
+*.gz
 
-# Bỏ qua các file rác của Python và Jupyter
+# 3. BỎ QUA RÁC CỦA PYTHON & COLAB
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+__MACOSX/
 
-# Bỏ qua thư mục môi trường ảo (nếu có)
+# 4. BỎ QUA MÔI TRƯỜNG ẢO VÀ CẤU HÌNH CÁ NHÂN
 venv/
 env/
 .env
+.vscode/

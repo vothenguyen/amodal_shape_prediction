@@ -33,7 +33,7 @@ def train():
     BATCH_SIZE = 4
     ACCUMULATION_STEPS = 4  # Batch 4 x 4 = Batch ảo 16
     EPOCHS = 30
-    RESUME_EPOCH = 0  
+    RESUME_EPOCH = 20
     LEARNING_RATE = 1e-4
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
