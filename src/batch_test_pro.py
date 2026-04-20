@@ -17,7 +17,7 @@ def batch_test_pro():
     # Gọi mô hình PRO MAX (Có Bơm Nhãn)
     model = AmodalSwinUNet(num_classes=91).to(DEVICE)
     
-    TEST_EPOCH = 20
+    TEST_EPOCH = 30
     weight_path = f'../checkpoints/swin_amodal_epoch_{TEST_EPOCH}.pth'
     
     try:

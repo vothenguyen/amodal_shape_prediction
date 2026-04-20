@@ -60,6 +60,41 @@ Báo cáo dự án: Phân đoạn Amodal với kiến trúc Swin Transformer + U
 3. Test: `python src/test_model.py`
 4. Notebook khám phá: `notebooks/explore_data.ipynb`.
 
-## 9. Ghi chú thêm
+## 9. Quy trình đánh giá toàn diện (Evaluation Pipeline)
+Để báo cáo trở thành "siêu phẩm", cần 3 phần evaluation:
+
+### A. Đánh giá Định lượng (Quantitative)
+Metrics định lượng: mIoU, Dice, Invisible mIoU.
+```bash
+python src/evaluate.py --img-dir ../data/val2014 --ann-file ../data/annotations/COCO_amodal_val2014.json --checkpoint ../checkpoints/swin_amodal_epoch_30.pth --output results/eval_results.json
+```
+
+### B. Đánh giá Định tính (Qualitative - Show hình ảnh)
+Hiển thị top-8 ảnh có IoU cao nhất (Original → Ground Truth → Prediction).
+```bash
+python src/qualitative_eval.py --eval-results results/eval_results.json --top-k 8 --output results/qualitative_best.png
+```
+
+### C. Phân tích Ca khó (Failure Analysis)
+Tìm 5 ca khó nhất (IoU < 30%) và giải thích tại sao model sai.
+```bash
+python src/failure_analysis.py --eval-results results/eval_results.json --threshold 0.3 --worst-k 5 --output results/failure_cases.png
+```
+
+### D. Ablation Study
+Chứng minh sức đóng góp của Spatial Attention: tăng +X% hiệu suất.
+```bash
+python src/ablation_study.py --checkpoint ../checkpoints/swin_amodal_epoch_30.pth --output results/ablation_results.json
+```
+
+### Nội dung trình bày
+- Metrics định lượng (1 bảng)
+- Hình ảnh best cases (1-2 trang)
+- Hình ảnh failure cases + giải thích (1 trang)
+- Ablation Study results (1-2 đoạn)
+
+Chi tiết xem [`EVALUATION.md`](EVALUATION.md)
+
+## 10. Ghi chú thêm
 - Code dùng nhiều comment tiếng Việt giúp hiểu nhanh flow.
 - Mô hình có thể mở rộng bằng: augment thêm, validation set, learning rate scheduler, early stopping, metrics IOU/F1.

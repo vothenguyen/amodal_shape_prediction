@@ -1,0 +1,44 @@
+{
+  "failure_cases": [
+    {
+      "sample_idx": 6819,
+      "iou": 2.8335033971926826e-11,
+      "dice": 2.8335033971926826e-11,
+      "occlusion_percentage": 100.0,
+      "complexity_score": 1.0,
+      "has_occlusion": true
+    },
+    {
+      "sample_idx": 3269,
+      "iou": 5.401026154094879e-11,
+      "dice": 5.401026154094879e-11,
+      "occlusion_percentage": 100.0,
+      "complexity_score": 1.0,
+      "has_occlusion": true
+    },
+    {
+      "sample_idx": 9354,
+      "iou": 5.4495911255836305e-11,
+      "dice": 5.4495911255836305e-11,
+      "occlusion_percentage": 100.0,
+      "complexity_score": 1.0,
+      "has_occlusion": true
+    },
+    {
+      "sample_idx": 4024,
+      "iou": 6.329113622083327e-11,
+      "dice": 6.329113622083327e-11,
+      "occlusion_percentage": 100.0,
+      "complexity_score": 1.0,
+      "has_occlusion": true
+    },
+    {
+      "sample_idx": 5357,
+      "iou": 6.605455765695822e-11,
+      "dice": 6.605455765695822e-11,
+      "occlusion_percentage": 100.0,
+      "complexity_score": 1.0,
+      "has_occlusion": true
+    }
+  ]
+}
