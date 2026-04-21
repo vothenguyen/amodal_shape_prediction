@@ -1,0 +1,18 @@
+{
+  "total_samples": 22163,
+  "occluded_samples": 12784,
+  "occluded_percentage": 57.681721788566534,
+  "occlusion_ratio_stats": {
+    "mean": 0.18895194155332887,
+    "median": 0.0542483660130719,
+    "max": 1.0,
+    "min": 0.0,
+    "std": 0.24837885960425563
+  },
+  "samples_above_threshold": {
+    "10%": 9835,
+    "25%": 6812,
+    "50%": 3275,
+    "75%": 926
+  }
+}
