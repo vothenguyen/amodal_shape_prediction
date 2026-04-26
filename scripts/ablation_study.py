@@ -1,4 +1,4 @@
-﻿import json
+import json
 import argparse
 import torch
 import torch.nn as nn
