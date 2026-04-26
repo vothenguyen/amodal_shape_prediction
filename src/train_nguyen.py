@@ -37,7 +37,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=5)
-    parser.add_argument('--batch-size', type=int, default=4)
+    parser.add_argument('--batch-size', type=int, default=128)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--data-dir', type=str, default='data')
     args = parser.parse_args()
