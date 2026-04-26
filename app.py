@@ -179,18 +179,6 @@ def end_to_end_predict(orig_image, pts, category_id):
 
         # CẢNH BÁO BẮT MẠCH: Nếu lúc train cậu xài Normalize ImageNet thì mở comment 3 dòng dưới ra nhé!
         img_norm = img_resized.astype(np.float32) / 255.0
-        # mean = np.array([0.485, 0.456, 0.406]).reshape(3, 1, 1)
-        # std = np.array([0.229, 0.224, 0.225]).reshape(3, 1, 1)
-        # img_tensor = (torch.from_numpy(img_norm.transpose(2, 0, 1)) - torch.tensor(mean)) / torch.tensor(std)
-        
-        # Nếu train không xài Normalize thì xài dòng mặc định này:
-        # --- ÉP CHUẨN IMAGENET ĐỂ CHỮA BỆNH CHO SWIN-UNET ---
-        # img_norm = img_resized.astype(np.float32) / 255.0
-        # mean = np.array([0.485, 0.456, 0.406]).reshape(3, 1, 1)
-        # std = np.array([0.229, 0.224, 0.225]).reshape(3, 1, 1)
-        
-        # Trừ mean, chia std đúng bài bản của timm
-        # img_tensor = (torch.from_numpy(img_norm.transpose(2, 0, 1)) - torch.tensor(mean)) / torch.tensor(std)
         img_tensor = torch.from_numpy(img_norm.transpose(2, 0, 1)).float()
         img_tensor = img_tensor.float()
         
