@@ -48,6 +48,11 @@ def main():
 
     # Dataset & Dataloader
     dataset = AmodalDatasetNguyen(root_dir=args.data_dir, split='train')
+    
+    # Check if dataset is empty to prevent DataLoader crash
+    if len(dataset) == 0:
+        raise RuntimeError(f"Error: Dataset is empty. No images found in {os.path.join(args.data_dir, 'train2014')}")
+        
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
     if len(loader) == 0:
         print("Warning: Dataloader is empty, check dataset path.")
