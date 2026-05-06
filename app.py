@@ -356,6 +356,21 @@ def end_to_end_predict(orig_image, pts, category_id):
             f"📊 SAM: {area_sam} px | Swin: {area_swin} px | Hidden: {area_invisible} px. {status_msg}"
         )
 
+        # Phóng kết quả về kích thước ảnh gốc
+        h, w = orig_image.shape[:2]
+
+        sam_colored = cv2.resize(
+            sam_colored,
+            (w, h),
+            interpolation=cv2.INTER_NEAREST
+        )
+
+        result_img = cv2.resize(
+            result_img,
+            (w, h),
+            interpolation=cv2.INTER_NEAREST
+        )
+
         # ──────────────────────────────────────────────────────────────
         # GIẢI PHÓNG BỘ NHỚ GPU
         # ──────────────────────────────────────────────────────────────
@@ -374,66 +389,89 @@ def end_to_end_predict(orig_image, pts, category_id):
 # GIAO DIỆN GRADIO
 # ===================================================================================
 with gr.Blocks() as demo:
-    # Tiêu đề
-    gr.Markdown("# 👁️ Amodal Shape Predictor - Dự đoán hình dạng vật thể bị che khuất")
 
-    # Quản lý state (trạng thái)
-    original_image = gr.State(None)      # Ảnh gốc
-    point_state = gr.State([])          # Danh sách điểm click
+    gr.Markdown("# 👁️ Amodal Shape Predictor")
+
+    original_image = gr.State(None)
+    point_state = gr.State([])
 
     with gr.Row():
-        # ─────── CỘT TRÁI: INPUT ───────
-        with gr.Column():
-            # Tải ảnh lên
-            input_image = gr.Image(label="📸 Ảnh đầu vào", interactive=True)
 
-            # Nút điều khiển
+        # ==================================
+        # CỘT 1 (1/3): INPUT
+        # ==================================
+        with gr.Column(scale=1):
+
+            input_image = gr.Image(
+                label="📸 Ảnh đầu vào",
+                interactive=True,
+                height=500
+            )
+
             with gr.Row():
                 btn_clear = gr.Button("🗑️ Xóa điểm")
                 btn_run = gr.Button("▶️ Chạy dự đoán")
 
-            # Chọn loại vật thể
             cat_dropdown = gr.Dropdown(
                 choices=CLASS_CHOICES,
                 value="24 - zebra (ngựa vằn)",
-                label="🏷️ Chọn loại vật thể",
-                filterable=True,
+                label="🏷️ Chọn loại vật thể"
             )
 
-        # ─────── CỘT PHẢI: OUTPUT ───────
-        with gr.Column():
-            sam_output = gr.Image(label="🎯 Kết quả SAM (Vùng phát hiện)")
-            final_output = gr.Image(label="🧠 Kết quả Amodal (Dự đoán hình dạng)")
-            status = gr.Textbox(label="📊 Trạng thái")
 
-    # ─────────────────────────────────────────────────────────────
-    # SỰ KIỆN NGƯỜI DÙNG
-    # ─────────────────────────────────────────────────────────────
-    # Khi tải ảnh lên
+        # ==================================
+        # PHẦN BÊN PHẢI = 2/3
+        # ==================================
+        with gr.Column(scale=2):
+
+            # Hàng trên: chia đều thành 2 cột
+            with gr.Row():
+
+                with gr.Column(scale=1):
+                    sam_output = gr.Image(
+                        label="🎯 Kết quả SAM",
+                        height=500
+                    )
+
+                with gr.Column(scale=1):
+                    final_output = gr.Image(
+                        label="🧠 Kết quả Amodal",
+                        height=500
+                    )
+
+            # Chỉ nằm dưới cột 2 và 3
+            status = gr.Textbox(
+                label="📊 Trạng thái",
+                lines=2
+            )
+
+    # ===============================
+    # EVENTS
+    # ===============================
+
     input_image.upload(
         lambda img: (img, []),
         inputs=[input_image],
         outputs=[original_image, point_state],
     )
 
-    # Khi xóa ảnh
-    input_image.clear(lambda: (None, []), outputs=[original_image, point_state])
+    input_image.clear(
+        lambda: (None, []),
+        outputs=[original_image, point_state]
+    )
 
-    # Khi click trên ảnh
     input_image.select(
         get_point,
         inputs=[original_image, point_state],
         outputs=[input_image, point_state],
     )
 
-    # Khi nhấn nút Xóa điểm
     btn_clear.click(
         clear_points,
         inputs=[original_image],
         outputs=[input_image, point_state],
     )
 
-    # Khi nhấn nút Chạy dự đoán
     btn_run.click(
         fn=end_to_end_predict,
         inputs=[original_image, point_state, cat_dropdown],

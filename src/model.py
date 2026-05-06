@@ -283,10 +283,11 @@ class AmodalSwinUNet(nn.Module):
         # ──────────────────────────────────────────────────────
         # PHASE 4: ÁP DỤNG SPATIAL ATTENTION & DƯỚI ĐỨC
         # ──────────────────────────────────────────────────────
-        # Áp dụng cơ chế chú ý không gian để tập trung vào vùng quan trọng
-        attended_features = self.spatial_attention(x_upsampled)
+        # TẠM THỜI TẮT: Áp dụng cơ chế chú ý không gian để tập trung vào vùng quan trọng
+        # attended_features = self.spatial_attention(x_upsampled)
+
         # Tạo ra dự đoán mask cuối cùng (logit chưa qua sigmoid)
-        logits = self.final_conv(attended_features)
+        logits = self.final_conv(x_upsampled) # Truyền thẳng x_upsampled vào lớp cuối
         
         return logits
 

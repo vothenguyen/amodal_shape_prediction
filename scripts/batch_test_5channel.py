@@ -45,7 +45,7 @@ def batch_test_5channel():
     # ─────────────────────────────────────────────────────────────
     model = AmodalSwinUNet().to(DEVICE)
     
-    TEST_EPOCH = 15 
+    TEST_EPOCH = 30
     weight_path = f'../checkpoints/swin_amodal_epoch_{TEST_EPOCH}.pth'
     
     try:

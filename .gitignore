@@ -12,6 +12,7 @@ data/
 
 # 3. BỎ QUA RÁC CỦA PYTHON & COLAB
 __pycache__/
+__.gradio__/
 *.pyc
 .ipynb_checkpoints/
 __MACOSX/
