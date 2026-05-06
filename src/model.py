@@ -6,24 +6,6 @@ import torchvision.models as models
 # --- CÁC KHỐI XÂY DỰNG CHỨC NĂNG (BUILDING BLOCKS) ---
 
 # ==========================================
-# 1. MẮT THẦN KHÔNG GIAN (SPATIAL ATTENTION)
-# ==========================================
-class SpatialAttention(nn.Module):
-    def __init__(self, kernel_size=7):
-        super().__init__()
-        assert kernel_size in (3, 7), "Kernel size must be 3 or 7"
-        padding = 3 if kernel_size == 7 else 1
-        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        x_cat = torch.cat([avg_out, max_out], dim=1)
-        scale = self.sigmoid(self.conv1(x_cat))
-        return x * scale
-
-# ==========================================
 # 2. Khối Chập Kép (Double Convolution)
 # ==========================================
 class DoubleConv(nn.Module):
@@ -76,9 +58,6 @@ class AmodalSwinUNet(nn.Module):
         # 2. BỘ GIẢI MÃ NHÃN (CATEGORY EMBEDDING) - Nhúng vào Bottleneck
         self.category_emb = nn.Embedding(num_classes, 768)
 
-        # 3. MẮT THẦN (SPATIAL ATTENTION) - Đặt ở cửa ra
-        self.spatial_attention = SpatialAttention(kernel_size=7)
-
         # 4. DECODER U-NET
         self.up1 = UpBlock(768, 384)
         self.up2 = UpBlock(384, 192)
@@ -118,9 +97,7 @@ class AmodalSwinUNet(nn.Module):
         x_upsampled = self.up_final(x_decoder)
 
         # --- PHASE 3: RA KẾT QUẢ ---
-        attended_features = self.spatial_attention(x_upsampled) # Bật mắt thần
-        logits = self.final_conv(attended_features) # Chốt hạ vẽ nét
-        
+        logits = self.final_conv(x_upsampled)
         return logits
 
 # --- PHẦN TEST NHANH ---
