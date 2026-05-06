@@ -14,54 +14,6 @@ import torch.nn as nn
 import timm
 import torchvision.models as models
 
-
-# ===================================================================================
-# KHỐI 1: CƠ CHẾ CHÚ Ý KHÔNG GIAN (SPATIAL ATTENTION MECHANISM)
-# ===================================================================================
-class SpatialAttention(nn.Module):
-    """
-    Cơ chế chú ý không gian - tập trung vào các khu vực quan trọng trong bản đồ đặc trưng.
-    
-    Hoạt động:
-    1. Tính trung bình và max theo chiều kênh
-    2. Nối 2 giá trị này lại
-    3. Áp dụng tích chập + sigmoid để tạo bản đồ trọng số
-    4. Nhân với input để tái cân bằng các kênh
-    
-    Args:
-        kernel_size: Kích thước kernel tích chập (3 hoặc 7, mặc định 7)
-    """
-    def __init__(self, kernel_size=7):
-        super().__init__()
-        assert kernel_size in (3, 7), "Kích thước kernel phải là 3 hoặc 7"
-        padding = 3 if kernel_size == 7 else 1
-        # Lớp tích chập: 2 kênh (avg + max) → 1 kênh trọng số
-        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
-        # Hàm kích hoạt sigmoid để chuẩn hóa trọng số về [0, 1]
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x):
-        """
-        Tính toán trọng số chú ý và nhân với input.
-        
-        Args:
-            x: Đầu vào [Batch, Channels, Height, Width]
-        
-        Returns:
-            Đầu ra được tái cân bằng theo trọng số chú ý
-        """
-        # Tính giá trị trung bình theo các kênh
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        # Tính giá trị cực đại theo các kênh
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        # Nối hai giá trị để có 2 kênh
-        x_cat = torch.cat([avg_out, max_out], dim=1)
-        # Tạo bản đồ trọng số chú ý
-        scale = self.sigmoid(self.conv1(x_cat))
-        # Tái cân bằng: nhân từng phần tử với trọng số tương ứng
-        return x * scale
-
-
 # ===================================================================================
 # KHỐI 2: TỔ HỢP TÍCH CHẬP KÉP (DOUBLE CONVOLUTION BLOCK)
 # ===================================================================================
@@ -196,12 +148,6 @@ class AmodalSwinUNet(nn.Module):
         self.category_emb = nn.Embedding(num_classes, 768)
 
         # ─────────────────────────────────────────────────────────────────────
-        # PHẦN 3: CƠ CHẾ CHÚ Ý (Spatial Attention)
-        # ─────────────────────────────────────────────────────────────────────
-        # Áp dụng tại cửa ra trước lớp tích chập cuối
-        self.spatial_attention = SpatialAttention(kernel_size=7)
-
-        # ─────────────────────────────────────────────────────────────────────
         # PHẦN 4: DECODER U-NET (Khôi phục độ phân giải)
         # ─────────────────────────────────────────────────────────────────────
         # 3 lớp up-sampling + skip connections
@@ -281,11 +227,8 @@ class AmodalSwinUNet(nn.Module):
         x_upsampled = self.up_final(x_decoder)
 
         # ──────────────────────────────────────────────────────
-        # PHASE 4: ÁP DỤNG SPATIAL ATTENTION & DƯỚI ĐỨC
+        # PHASE 4: DỰ ĐOÁN ĐẦU RA CUỐI CÙNG
         # ──────────────────────────────────────────────────────
-        # TẠM THỜI TẮT: Áp dụng cơ chế chú ý không gian để tập trung vào vùng quan trọng
-        # attended_features = self.spatial_attention(x_upsampled)
-
         # Tạo ra dự đoán mask cuối cùng (logit chưa qua sigmoid)
         logits = self.final_conv(x_upsampled) # Truyền thẳng x_upsampled vào lớp cuối
         
