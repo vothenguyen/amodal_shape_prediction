@@ -62,7 +62,7 @@ class UpBlock(nn.Module):
 # ==========================================
 class AmodalSwinUNet(nn.Module):
     # Tích hợp thêm công tắc use_spatial_attention
-    def __init__(self, model_name="swin_tiny_patch4_window7_224", pretrained=True, num_classes=91, use_spatial_attention=False):
+    def __init__(self, model_name="swin_tiny_patch4_window7_224", pretrained=True, num_classes=91, use_spatial_attention=True):
         super().__init__()
         self.use_spatial_attention = use_spatial_attention
 
