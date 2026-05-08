@@ -39,14 +39,13 @@ def train():
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🚀 Đang chạy trên thiết bị: {DEVICE}")
 
-    # Đường dẫn chuẩn Kaggle Input
+    # Đường dẫn chuẩn ổ ảo Colab
     img_dir = "/content/kitti_data/training/image_2"
     ann_file = "/content/kins_data/update_train_2020.json"
 
     train_transform = A.Compose([
         A.Resize(224, 224),
         A.HorizontalFlip(p=0.5),
-        # Dùng Affine thay cho ShiftScaleRotate để tránh Warning của bản mới
         A.Affine(scale=(0.9, 1.1), translate_percent=(-0.05, 0.05), rotate=(-15, 15), p=0.5),
         A.RandomBrightnessContrast(p=0.2),
     ])
@@ -58,8 +57,12 @@ def train():
     # Khởi tạo mô hình với 8 lớp (KINS)
     model = AmodalSwinUNet(num_classes=8).to(DEVICE)
 
+    # Thư mục lưu đã được kết nối với Drive của cậu thông qua symlink
+    SAVE_DIR = "../checkpoints"
+    os.makedirs(SAVE_DIR, exist_ok=True)
+
     if RESUME_EPOCH > 0:
-        weight_path = f"/kaggle/working/checkpoints/swin_amodal_KINS_epoch_{RESUME_EPOCH}.pth"
+        weight_path = os.path.join(SAVE_DIR, f"swin_amodal_KINS_epoch_{RESUME_EPOCH}.pth")
         model.load_state_dict(torch.load(weight_path, map_location=DEVICE))
         print(f"\n🔄 HỒI SINH THÀNH CÔNG: Đã nạp lại 'bộ não' từ Epoch {RESUME_EPOCH}!")
 
@@ -67,10 +70,6 @@ def train():
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
-
-    # Đảm bảo lưu vào đúng /kaggle/working/ để không bị lỗi phân quyền và dễ tải về
-    SAVE_DIR = "/kaggle/working/checkpoints"
-    os.makedirs(SAVE_DIR, exist_ok=True)
 
     print(f"\n🔥 BẮT ĐẦU HUẤN LUYỆN KINS (AUTONOMOUS DRIVING) TỪ EPOCH {RESUME_EPOCH + 1} ĐẾN {EPOCHS} 🔥")
     for epoch in range(RESUME_EPOCH, EPOCHS):
@@ -105,7 +104,7 @@ def train():
         current_lr = scheduler.get_last_lr()[0]
         print(f"✅ Kết thúc Epoch {epoch+1} | Trung bình Loss: {avg_loss:.4f} | LR: {current_lr:.6f}")
 
-        # Tên file mới, chuẩn hóa cho KINS
+        # Lưu thẳng vào ../checkpoints (tức là chạy tuột vào Drive của cậu)
         save_path = os.path.join(SAVE_DIR, f"swin_amodal_KINS_epoch_{epoch+1}.pth")
         torch.save(model.state_dict(), save_path)
         print(f"💾 Đã lưu model tại: {save_path}\n")
