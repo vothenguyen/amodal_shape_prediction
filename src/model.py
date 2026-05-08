@@ -6,6 +6,25 @@ import torchvision.models as models
 # --- CÁC KHỐI XÂY DỰNG CHỨC NĂNG (BUILDING BLOCKS) ---
 
 # ==========================================
+# 1. Khối Mắt Thần (Spatial Attention)
+# ==========================================
+class SpatialAttention(nn.Module):
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
+        padding = 3 if kernel_size == 7 else 1
+
+        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        x_cat = torch.cat([avg_out, max_out], dim=1)
+        x_cat = self.conv1(x_cat)
+        return x * self.sigmoid(x_cat)
+
+# ==========================================
 # 2. Khối Chập Kép (Double Convolution)
 # ==========================================
 class DoubleConv(nn.Module):
@@ -42,8 +61,10 @@ class UpBlock(nn.Module):
 # --- MÔ HÌNH CHÍNH (AMODAL SWIN-UNET PRO MAX) ---
 # ==========================================
 class AmodalSwinUNet(nn.Module):
-    def __init__(self, model_name="swin_tiny_patch4_window7_224", pretrained=True, num_classes=91):
+    # Tích hợp thêm công tắc use_spatial_attention
+    def __init__(self, model_name="swin_tiny_patch4_window7_224", pretrained=True, num_classes=91, use_spatial_attention=False):
         super().__init__()
+        self.use_spatial_attention = use_spatial_attention
 
         # 1. ENCODER (5 KÊNH)
         self.encoder = timm.create_model(model_name, pretrained=pretrained, features_only=True)
@@ -55,10 +76,10 @@ class AmodalSwinUNet(nn.Module):
             self.encoder.patch_embed.proj.weight[:, :3, :, :] = pretrained_patch_embed
             self.encoder.patch_embed.proj.weight[:, 3:, :, :] = 0
 
-        # 2. BỘ GIẢI MÃ NHÃN (CATEGORY EMBEDDING) - Nhúng vào Bottleneck
+        # 2. BỘ GIẢI MÃ NHÃN (CATEGORY EMBEDDING)
         self.category_emb = nn.Embedding(num_classes, 768)
 
-        # 4. DECODER U-NET
+        # 3. DECODER U-NET
         self.up1 = UpBlock(768, 384)
         self.up2 = UpBlock(384, 192)
         self.up3 = UpBlock(192, 96)
@@ -70,9 +91,12 @@ class AmodalSwinUNet(nn.Module):
             nn.ReLU(inplace=True),
         )
 
+        # 4. KHAI BÁO MẮT THẦN (NẾU CÔNG TẮC BẬT)
+        if self.use_spatial_attention:
+            self.spatial_attention = SpatialAttention(kernel_size=7)
+
         self.final_conv = nn.Conv2d(64, 1, kernel_size=1)
 
-    # Đón 2 đầu vào: x (Ảnh 5 Kênh) và class_ids (Nhãn vật thể)
     def forward(self, x, class_ids):
         # --- PHASE 1: ENCODER ---
         skip_connections = self.encoder(x)
@@ -81,13 +105,12 @@ class AmodalSwinUNet(nn.Module):
         for skip in skip_connections:
             formatted_skips.append(skip.permute(0, 3, 1, 2))
 
-        # Rút trích Bottleneck (Lõi cô đặc nhất)
         x_bottleneck = formatted_skips[3]
 
         # --- BƠM NHÃN VÀO LÕI ---
-        c_emb = self.category_emb(class_ids) # [Batch, 768]
-        c_emb = c_emb.unsqueeze(-1).unsqueeze(-1) # Kéo giãn thành [Batch, 768, 1, 1]
-        x_bottleneck = x_bottleneck + c_emb # Hợp thể!
+        c_emb = self.category_emb(class_ids) 
+        c_emb = c_emb.unsqueeze(-1).unsqueeze(-1) 
+        x_bottleneck = x_bottleneck + c_emb 
 
         # --- PHASE 2: DECODER ---
         x_decoder = self.up1(x_bottleneck, formatted_skips[2])  
@@ -96,23 +119,28 @@ class AmodalSwinUNet(nn.Module):
 
         x_upsampled = self.up_final(x_decoder)
 
+        # --- BẬT MẮT THẦN TRƯỚC KHI XUẤT XƯỞNG (NẾU CÓ) ---
+        if self.use_spatial_attention:
+            x_upsampled = self.spatial_attention(x_upsampled)
+
         # --- PHASE 3: RA KẾT QUẢ ---
         logits = self.final_conv(x_upsampled)
         return logits
 
 # --- PHẦN TEST NHANH ---
 if __name__ == "__main__":
-    model = AmodalSwinUNet()
+    # Test bản không có Attention
+    model_no_attn = AmodalSwinUNet(use_spatial_attention=False)
+    # Test bản có Attention
+    model_with_attn = AmodalSwinUNet(use_spatial_attention=True)
     
-    # Giả lập input: 2 bức ảnh, 5 Kênh, 224x224
     dummy_input = torch.randn(2, 5, 224, 224)
-    # Giả lập nhãn: Bức 1 là class 3, Bức 2 là class 1
     dummy_class = torch.tensor([3, 1]) 
     
     with torch.no_grad():
-        output = model(dummy_input, dummy_class)
+        out1 = model_no_attn(dummy_input, dummy_class)
+        out2 = model_with_attn(dummy_input, dummy_class)
         
-    print(f"✅ Kiến trúc U-Net 5 Kênh + Bơm Nhãn + Mắt Thần đã OK!")
-    print(f"Đầu vào Ảnh: {dummy_input.shape}")
-    print(f"Đầu vào Nhãn: {dummy_class.shape}")
-    print(f"Đầu ra (Mask): {output.shape} (Phải là 2x1x224x224)")
+    print(f"✅ Đã khởi tạo thành công cả 2 phiên bản!")
+    print(f"Shape đầu ra (Không Attention): {out1.shape}")
+    print(f"Shape đầu ra (Có Attention): {out2.shape}")
