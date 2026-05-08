@@ -6,12 +6,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import albumentations as A
 
-# Import từ file của tụi mình
-from dataset import AmodalDataset
+# SỬ DỤNG BỘ BÓC TÁCH MỚI CỦA KINS
+from dataset_kins import KINSDataset
 from model import AmodalSwinUNet
 
 class OcclusionAwareLoss(nn.Module):
-    def __init__(self, occlusion_weight=5.0):  # THƯỞNG X5 ĐIỂM!!!
+    def __init__(self, occlusion_weight=5.0):
         super().__init__()
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
         self.occlusion_weight = occlusion_weight
@@ -30,16 +30,16 @@ class OcclusionAwareLoss(nn.Module):
         return weighted_bce + dice_loss.mean()
 
 def train():
-    BATCH_SIZE = 4
-    ACCUMULATION_STEPS = 4  # Batch 4 x 4 = Batch ảo 16
+    # 🚀 TỐI ƯU HÓA CHO A100 🚀
+    BATCH_SIZE = 64        # Ép A100 ăn 64 ảnh cùng lúc
+    ACCUMULATION_STEPS = 1 
     EPOCHS = 30
     RESUME_EPOCH = 0
     LEARNING_RATE = 1e-4
 
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Đang chạy trên thiết bị: {DEVICE}")
+    print(f"🚀 Đang chạy trên siêu xe: {torch.cuda.get_device_name(0)}")
 
-    # Đường dẫn chuẩn ổ ảo Colab
     img_dir = "/content/kitti_data/training/image_2"
     ann_file = "/content/kins_data/update_train_2020.json"
 
@@ -51,27 +51,29 @@ def train():
     ])
 
     print("Đang chuẩn bị DataLoader với Data Augmentation...")
-    train_dataset = AmodalDataset(img_dir=img_dir, ann_file=ann_file, transform=train_transform)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    train_dataset = KINSDataset(img_dir=img_dir, ann_file=ann_file, transform=train_transform)
+    
+    # 🚀 TĂNG TỐC ĐỘ ĐỌC Ổ CỨNG 🚀
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=BATCH_SIZE, 
+        shuffle=True,
+        num_workers=4,       
+        pin_memory=True      
+    )
 
-    # Khởi tạo mô hình với 8 lớp (KINS)
-    model = AmodalSwinUNet(num_classes=8).to(DEVICE)
-
-    # Thư mục lưu đã được kết nối với Drive của cậu thông qua symlink
+    model = AmodalSwinUNet(num_classes=20).to(DEVICE)
     SAVE_DIR = "../checkpoints"
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    if RESUME_EPOCH > 0:
-        weight_path = os.path.join(SAVE_DIR, f"swin_amodal_KINS_epoch_{RESUME_EPOCH}.pth")
-        model.load_state_dict(torch.load(weight_path, map_location=DEVICE))
-        print(f"\n🔄 HỒI SINH THÀNH CÔNG: Đã nạp lại 'bộ não' từ Epoch {RESUME_EPOCH}!")
-
     criterion = OcclusionAwareLoss(occlusion_weight=5.0)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
-    
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
-    print(f"\n🔥 BẮT ĐẦU HUẤN LUYỆN KINS (AUTONOMOUS DRIVING) TỪ EPOCH {RESUME_EPOCH + 1} ĐẾN {EPOCHS} 🔥")
+    # 🚀 BẢO BỐI KÍCH HOẠT TENSOR CORES (AMP) 🚀
+    scaler = torch.cuda.amp.GradScaler()
+
+    print(f"\n🔥 BẮT ĐẦU HUẤN LUYỆN KINS BẰNG A100 TỪ EPOCH {RESUME_EPOCH + 1} ĐẾN {EPOCHS} 🔥")
     for epoch in range(RESUME_EPOCH, EPOCHS):
         model.train()
         total_loss = 0
@@ -80,31 +82,29 @@ def train():
         progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch+1}/{EPOCHS}")
 
         for i, (inputs, targets, occluded, class_ids) in progress_bar:
-            inputs = inputs.to(DEVICE)
-            targets = targets.unsqueeze(1).float().to(DEVICE)
-            occluded = occluded.unsqueeze(1).float().to(DEVICE)
-            class_ids = class_ids.to(DEVICE)
+            inputs = inputs.to(DEVICE, non_blocking=True)
+            targets = targets.unsqueeze(1).float().to(DEVICE, non_blocking=True)
+            occluded = occluded.unsqueeze(1).float().to(DEVICE, non_blocking=True)
+            class_ids = class_ids.to(DEVICE, non_blocking=True)
 
-            outputs = model(inputs, class_ids) 
-            loss = criterion(outputs, targets, occluded)
+            # Ép GPU dùng FP16 để tính toán tốc độ ánh sáng
+            with torch.cuda.amp.autocast():
+                outputs = model(inputs, class_ids) 
+                loss = criterion(outputs, targets, occluded)
             
-            loss = loss / ACCUMULATION_STEPS 
-            loss.backward()
+            # Tính gradient bằng Scaler
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
 
-            if ((i + 1) % ACCUMULATION_STEPS == 0) or ((i + 1) == len(train_loader)):
-                optimizer.step()
-                optimizer.zero_grad()
-
-            total_loss += loss.item() * ACCUMULATION_STEPS
-            progress_bar.set_postfix(loss=loss.item() * ACCUMULATION_STEPS)
+            total_loss += loss.item()
+            progress_bar.set_postfix(loss=loss.item())
 
         scheduler.step() 
-
         avg_loss = total_loss / len(train_loader)
-        current_lr = scheduler.get_last_lr()[0]
-        print(f"✅ Kết thúc Epoch {epoch+1} | Trung bình Loss: {avg_loss:.4f} | LR: {current_lr:.6f}")
+        print(f"✅ Kết thúc Epoch {epoch+1} | Trung bình Loss: {avg_loss:.4f}")
 
-        # Lưu thẳng vào ../checkpoints (tức là chạy tuột vào Drive của cậu)
         save_path = os.path.join(SAVE_DIR, f"swin_amodal_KINS_epoch_{epoch+1}.pth")
         torch.save(model.state_dict(), save_path)
         print(f"💾 Đã lưu model tại: {save_path}\n")
