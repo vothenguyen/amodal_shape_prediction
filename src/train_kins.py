@@ -40,8 +40,8 @@ def train():
     print(f"🚀 Đang chạy trên thiết bị: {DEVICE}")
 
     # Đường dẫn chuẩn Kaggle Input
-    img_dir = "/kaggle/input/datasets/anupammajhi/kitti-2d-object-detection/data_object_image_2/training/image_2"
-    ann_file = "/kaggle/input/datasets/ryanthenguyen/kins-data/update_train_2020.json"
+    img_dir = "/content/kitti_data/training/image_2"
+    ann_file = "/content/kins_data/update_train_2020.json"
 
     train_transform = A.Compose([
         A.Resize(224, 224),
