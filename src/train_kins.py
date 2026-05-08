@@ -62,7 +62,7 @@ def train():
         pin_memory=True      
     )
 
-    model = AmodalSwinUNet(num_classes=20).to(DEVICE)
+    model = AmodalSwinUNet(num_classes=20, use_spatial_attention=True).to(DEVICE)
     SAVE_DIR = "../checkpoints"
     os.makedirs(SAVE_DIR, exist_ok=True)
 
