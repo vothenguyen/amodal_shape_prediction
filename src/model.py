@@ -62,7 +62,7 @@ class UpBlock(nn.Module):
 # ==========================================
 class AmodalSwinUNet(nn.Module):
     # Tích hợp thêm công tắc use_spatial_attention
-    def __init__(self, model_name="swin_tiny_patch4_window7_224", pretrained=True, num_classes=91, use_spatial_attention=True):
+    def __init__(self, model_name="swin_tiny_patch4_window7_224", pretrained=True, num_classes=91, use_spatial_attention=True, in_chans = 5):
         super().__init__()
         self.use_spatial_attention = use_spatial_attention
 
@@ -70,7 +70,7 @@ class AmodalSwinUNet(nn.Module):
         self.encoder = timm.create_model(model_name, pretrained=pretrained, features_only=True)
         
         pretrained_patch_embed = self.encoder.patch_embed.proj.weight
-        self.encoder.patch_embed.proj = nn.Conv2d(5, 96, kernel_size=4, stride=4) 
+        self.encoder.patch_embed.proj = nn.Conv2d(in_chans, 96, kernel_size=4, stride=4) 
         
         with torch.no_grad():
             self.encoder.patch_embed.proj.weight[:, :3, :, :] = pretrained_patch_embed
