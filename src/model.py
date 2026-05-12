@@ -62,10 +62,10 @@ class UpBlock(nn.Module):
 # ==========================================
 class AmodalSwinUNet(nn.Module):
     # Tích hợp thêm công tắc use_spatial_attention
-    def __init__(self, model_name="swin_tiny_patch4_window7_224", pretrained=True, num_classes=91, use_spatial_attention=True, in_chans = 5):
+    def __init__(self, model_name="swin_tiny_patch4_window7_224", pretrained=True, num_classes=20, use_spatial_attention=False, in_chans=5, use_category_embedding=True):
         super().__init__()
         self.use_spatial_attention = use_spatial_attention
-
+        self.use_category_embedding = use_category_embedding
         # 1. ENCODER (5 KÊNH)
         self.encoder = timm.create_model(model_name, pretrained=pretrained, features_only=True)
         
@@ -77,7 +77,8 @@ class AmodalSwinUNet(nn.Module):
             self.encoder.patch_embed.proj.weight[:, 3:, :, :] = 0
 
         # 2. BỘ GIẢI MÃ NHÃN (CATEGORY EMBEDDING)
-        self.category_emb = nn.Embedding(num_classes, 768)
+        if self.use_category_embedding:
+            self.category_emb = nn.Embedding(num_classes, 768)
 
         # 3. DECODER U-NET
         self.up1 = UpBlock(768, 384)
@@ -108,9 +109,10 @@ class AmodalSwinUNet(nn.Module):
         x_bottleneck = formatted_skips[3]
 
         # --- BƠM NHÃN VÀO LÕI ---
-        c_emb = self.category_emb(class_ids) 
-        c_emb = c_emb.unsqueeze(-1).unsqueeze(-1) 
-        x_bottleneck = x_bottleneck + c_emb 
+        if self.use_category_embedding:
+            c_emb = self.category_emb(class_ids) 
+            c_emb = c_emb.unsqueeze(-1).unsqueeze(-1) 
+            x_bottleneck = x_bottleneck + c_emb
 
         # --- PHASE 2: DECODER ---
         x_decoder = self.up1(x_bottleneck, formatted_skips[2])  
