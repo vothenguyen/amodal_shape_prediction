@@ -67,4 +67,4 @@ Dự án được tổ chức như sau:
 ## 📊 5. Nghiên cứu Thực nghiệm (Ablation Study)
 Dự án hỗ trợ 6 cấu hình mô hình thực nghiệm khác nhau tương ứng với bảng so sánh **Table V: Ablation Study on COCOA Dataset** (bao gồm các thay đổi về hàm Loss, Edge Mask, Category Embedding và Spatial Attention).
 
-![Table V: Ablation Study](./assets/Table%20V.png)
+![Table V: Ablation Study](./assets/Table.png)
