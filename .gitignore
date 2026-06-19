@@ -1,0 +1,35 @@
+# Môi trường Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+env/
+
+# Thư mục chứa dữ liệu (Không đẩy data lên Git)
+data/
+dataset/
+
+# Thư mục chứa model checkpoints (Tránh đẩy file .pt, .pth lên Git vì quá nặng)
+checkpoints/*.pt
+checkpoints/*.pth
+models/
+*.pth
+
+# Kết quả chạy (Outputs)
+results/
+runs/
+*.png
+*.jpg
+*.json
+!COCO_amodal_val2014.json # Nếu bạn muốn giữ lại file annotation nhỏ (tuỳ chọn)
+
+# IDE / OS files
+.vscode/
+.idea/
+.DS_Store
+.gradio/
+
+# Cho phép đẩy thư mục assets (hình ảnh minh họa, bảng biểu) lên Git
+!assets/
+!assets/**
