@@ -11,7 +11,7 @@ Tính năng:
 - Progress bar theo dõi training
 - Tự động lưu checkpoint sau mỗi epoch
 
-Chạy: python src/train.py
+Chạy: python scripts/train.py
 ===================================================================================
 """
 
