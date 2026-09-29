@@ -1,9 +1,9 @@
-# 🚀 BÁO CÁO NGHIỆM THU PHASE 6 & TÀI LIỆU BÀN GIAO HUẤN LUYỆN A100
+# 🚀 BÁO CÁO NGHIỆM THU PHASE 6 & TÀI LIỆU BÀN GIAO HUẤN LUYỆN H200
 
 > **Dự án:** Amodal Shape Prediction (MVTec D2S Amodal - Table V Ablation Study)  
-> **Giai đoạn:** Phase 6 — Kiểm chứng Resume Khẩn cấp, Bổ sung Metric Giám sát & Đóng gói Bàn giao A100  
+> **Giai đoạn:** Phase 6 — Kiểm chứng Resume Khẩn cấp, Bổ sung Metric Giám sát & Đóng gói Bàn giao h200  
 > **Môi trường cục bộ kiểm chứng:** NVIDIA GeForce RTX 3050 Laptop GPU (4GB VRAM), CUDA 12.6, PyTorch 2.9.1+cu126  
-> **Môi trường bàn giao đích:** NVIDIA A100 (40GB/80GB VRAM) / Linux / Slurm / Google Colab Pro  
+> **Môi trường bàn giao đích:** NVIDIA H200 (40GB/80GB VRAM) / Linux / Slurm / Google Colab Pro  
 
 ---
 
@@ -39,7 +39,7 @@
 
 ---
 
-### Ưu tiên 3: Đóng gói Tài liệu & Script Bàn giao cho Thầy Huấn luyện trên A100 — HOÀN THÀNH 100%
+### Ưu tiên 3: Đóng gói Tài liệu & Script Bàn giao cho Thầy Huấn luyện trên h200 — HOÀN THÀNH 100%
 - Đã chuẩn hóa toàn bộ tên thư mục checkpoint theo quy chuẩn thống nhất: `checkpoints/d2sa/amodal_shape_prediction_main_config` (cho Row 4).
 - Cập nhật [`scripts/run_ablation_d2sa.py`](scripts/run_ablation_d2sa.py): hỗ trợ đầy đủ các tham số `--rows`, `--epochs`, `--batch-size`, `--accumulation-steps`, `--num-workers`, `--resume-epoch`, `--resume-checkpoint`.
 - Cập nhật [`scripts/run_ablation_d2sa.sh`](scripts/run_ablation_d2sa.sh): tự động nhận diện thư mục gốc dự án trên Linux, hỗ trợ biến môi trường linh hoạt.
@@ -78,7 +78,7 @@
 
 ---
 
-## 💻 3. HƯỚNG DẪN DÀNH CHO THẦY KHI CHẠY TRÊN A100
+## 💻 3. HƯỚNG DẪN DÀNH CHO THẦY KHI CHẠY TRÊN h200
 
 ### 3.1. Thiết lập Môi trường & Tải Dữ liệu D2SA (Bắt buộc)
 
@@ -143,7 +143,7 @@ python scripts/verify_d2sa_dataset.py
 
 ---
 
-### 3.2. Chạy Toàn bộ 6 Cấu hình (Khuyến nghị cho A100)
+### 3.2. Chạy Toàn bộ 6 Cấu hình (Khuyến nghị cho h200)
 Thầy có thể chạy toàn bộ 6 cấu hình tuần tự chỉ bằng 1 câu lệnh Bash duy nhất (khuyến nghị chạy trong phiên `tmux` hoặc nền qua `nohup`):
 
 ```bash
@@ -219,7 +219,7 @@ tail -f logs/d2sa/row4_main_config/*_train.log
 
 ## ⏱️ 4. DỰ TOÁN THỜI GIAN & NGOẠI SUY HIỆU NĂNG
 
-> ⚠️ **LƯU Ý:** Các con số dưới đây là **ƯỚC LƯỢNG NGOẠI SUY** từ bài benchmark đo đạc thực tế trên subset 200 mẫu ở máy local, **chưa được đo trực tiếp trên GPU A100**.
+> ⚠️ **LƯU Ý:** Các con số dưới đây là **ƯỚC LƯỢNG NGOẠI SUY** từ bài benchmark đo đạc thực tế trên subset 200 mẫu ở máy local, **chưa được đo trực tiếp trên GPU h200**.
 
 ### 4.1. Bằng chứng Đo lường Thực nghiệm Cục bộ (Subset 200 mẫu trên RTX 3050):
 - **Phần cứng thử nghiệm:** NVIDIA GeForce RTX 3050 Laptop GPU (4GB VRAM), CPU 8 nhân, SSD, Windows 11.
@@ -232,8 +232,8 @@ tail -f logs/d2sa/row4_main_config/*_train.log
 | Thiết lập & Môi trường | Throughput ước tính | Thời gian / Epoch | 1 Cấu hình (30 Epochs) | Toàn bộ 6 Cấu hình (Train thuần) | Đánh giá & Khuyến nghị |
 |:---|:---:|:---:|:---:|:---:|:---|
 | **Local RTX 3050** (2 workers) | ~2.90 mẫu/s | ~75 phút | ~37.5 giờ | ~225 giờ | *Đo thực nghiệm (Chỉ chạy subset/smoke)* |
-| **A100 Server** (4 workers, NVMe) | ~15 – 25 mẫu/s | ~8.5 – 14.5 phút | ~4.2 – 7.2 giờ | ~25 – 43 giờ | *Ngoại suy (Worker thấp)* |
-| **A100 Server** (8–16 workers, NVMe) | ~35 – 50 mẫu/s | ~4.3 – 6.2 phút | ~2.1 – 3.1 giờ | **~13 – 18 giờ** | *Ngoại suy khuyến nghị (Bão hòa GPU)* |
+| **h200 Server** (4 workers, NVMe) | ~15 – 25 mẫu/s | ~8.5 – 14.5 phút | ~4.2 – 7.2 giờ | ~25 – 43 giờ | *Ngoại suy (Worker thấp)* |
+| **h200 Server** (8–16 workers, NVMe) | ~35 – 50 mẫu/s | ~4.3 – 6.2 phút | ~2.1 – 3.1 giờ | **~13 – 18 giờ** | *Ngoại suy khuyến nghị (Bão hòa GPU)* |
 
 ---
 
@@ -247,7 +247,7 @@ tail -f logs/d2sa/row4_main_config/*_train.log
   - Thời gian evaluate 100 mẫu validation: **7.40 giây**.
   - Throughput đánh giá thực tế: **~13.51 mẫu / giây** (nhanh hơn huấn luyện vì chỉ chạy `forward` và tính IoU, không có `backward`, `loss.backward()`, hay optimizer step).
   - Ngoại suy trên máy local cho full 15,654 mẫu validation: $\frac{15,654}{13.51} \approx 1,158.8\text{s} \approx \mathbf{19.3\text{ phút / lượt}}$.
-- **Ngoại suy trên máy chủ A100 (với NVMe SSD và DataLoader 8–16 workers):**
+- **Ngoại suy trên máy chủ h200 (với NVMe SSD và DataLoader 8–16 workers):**
   - Throughput ước tính: **~40 – 65 mẫu / giây**.
   - Thời gian chạy 1 lượt đánh giá toàn bộ 15,654 mẫu: $\frac{15,654}{40..65} \approx \mathbf{4.0 – 6.5\text{ phút / lượt}}$.
 
@@ -260,7 +260,7 @@ tail -f logs/d2sa/row4_main_config/*_train.log
 #### 3. Giải pháp Tối ưu: Đánh giá 2 Tầng (`--val-subset-size 500`):
 Hệ thống cả 6 cấu hình đã được nâng cấp cơ chế **Dual-level Validation DataLoader**:
 - **Các lượt định kỳ giữa chừng (Epoch 5, 10, 15, 20, 25):** Chạy trên tập con `--val-subset-size 500` mẫu.
-  - Thời gian mỗi lượt trên A100: **~8 – 12 giây** (gần như tức thì!).
+  - Thời gian mỗi lượt trên h200: **~8 – 12 giây** (gần như tức thì!).
   - Mục đích: Theo dõi tiến trình hội tụ, kiểm tra chỉ số `% pixel dương` (`pos_pixel_pct`) để bắt sớm lỗi sụp đổ mô hình mà không làm gián đoạn GPU.
 - **Lượt đánh giá tổng kết ở Epoch 30 (Epoch cuối cùng):** Tự động chuyển sang nạp toàn bộ **15,654 mẫu validation** để tính toán bộ chỉ số mIoU, Dice, Precision, Recall chính xác tuyệt đối.
   - Thời gian đánh giá epoch cuối: **~5 – 6 phút / cấu hình**.
@@ -342,5 +342,5 @@ Hệ thống cả 6 cấu hình đã được nâng cấp cơ chế **Dual-level
 
 #### Kết luận Đánh giá Trực Quan:
 - Không tồn tại lỗi hoán đổi trục (transpose $H/W$), lỗi lật ảnh (flip), hay lệch tâm zero-pad.
-- Dữ liệu D2SA sau khâu tiền xử lý sẵn sàng 100% cho quá trình huấn luyện và đánh giá trên cụm máy chủ A100.
+- Dữ liệu D2SA sau khâu tiền xử lý sẵn sàng 100% cho quá trình huấn luyện và đánh giá trên cụm máy chủ h200.
 
