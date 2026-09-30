@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ===================================================================================
-# BASH RUNNER CHO ABLATION STUDY D2SA (CHẠY TRÊN A100 / LINUX / COLAB / SLURM)
+# BASH RUNNER CHO ABLATION STUDY D2SA (CHẠY TRÊN NVIDIA H200 141GB / LINUX / SLURM)
 # ===================================================================================
 set -e
 
@@ -12,14 +12,14 @@ cd "${ROOT_DIR}"
 # Cấu hình tham số (có thể override bằng biến môi trường hoặc tham số dòng lệnh)
 DEVICE="${1:-${DEVICE:-cuda}}"
 EPOCHS="${2:-${EPOCHS:-30}}"
-BATCH_SIZE="${3:-${BATCH_SIZE:-4}}"
-ACC_STEPS="${4:-${ACC_STEPS:-4}}"
-NUM_WORKERS="${5:-${NUM_WORKERS:-4}}"
+BATCH_SIZE="${3:-${BATCH_SIZE:-16}}"
+ACC_STEPS="${4:-${ACC_STEPS:-1}}"
+NUM_WORKERS="${5:-${NUM_WORKERS:-8}}"
 VAL_SUBSET_SIZE="${VAL_SUBSET_SIZE:-500}"
 ROWS="${ROWS:-1 2 3 4 5 6}"
 
 echo "========================================================================"
-echo "🚀 ABLATION STUDY D2SA (MVTec D2S Amodal) - A100 RUNNER"
+echo "🚀 ABLATION STUDY D2SA (MVTec D2S Amodal) - H200 RUNNER (141GB VRAM)"
 echo "   Thư mục dự án:  ${ROOT_DIR}"
 echo "   Các Row chạy:   ${ROWS}"
 echo "   Thiết bị GPU:   ${DEVICE}"
