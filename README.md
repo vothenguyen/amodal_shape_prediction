@@ -5,66 +5,80 @@
 ![Gradio](https://img.shields.io/badge/Gradio-UI-blue.svg?style=flat-square)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)
 
-Báo cáo dự án Nghiên cứu Khoa học / Đồ án chuyên ngành Khoa học Máy tính.
-Dự án xây dựng mô hình phân đoạn **Amodal Mask**: dự đoán vùng vật thể đầy đủ ngay cả khi chúng bị lấp hoặc che khuất (occlusion) bởi các vật thể khác. 
+Báo cáo dự án Nghiên cứu Khoa học / Đồ án tốt nghiệp: **Amodal Shape Prediction** — Dự đoán hình dạng đầy đủ của vật thể ngay cả khi bị che khuất (occlusion).
 
-Hệ thống được thiết kế theo dạng Pipeline 2 giai đoạn (2-Stage) kết hợp sức mạnh Zero-shot của **Segment Anything Model (SAM 2.1)** và khả năng học biểu diễn toàn cục của **Swin Transformer + U-Net**.
-
-
+Hệ thống được thiết kế theo pipeline 2 giai đoạn:
+1. **Stage 1 (Phân đoạn cục bộ):** `SAM 2.1` trích xuất mặt nạ hiển thị (Visible Mask) từ điểm click chuột (zero-shot).
+2. **Stage 2 (Suy luận Amodal):** `Amodal Swin-UNet` đa kênh kết hợp Category Embedding và hàm mất mát Occlusion-Aware Loss để tái tạo toàn bộ hình dáng (Amodal Mask).
 
 ---
 
-## 🌟 1. Tính năng & Mục tiêu cốt lõi
-- **Tương tác trực quan:** Hỗ trợ click chuột (Point Prompt) trực tiếp trên ảnh để chọn vật thể. Hỗ trợ dự đoán cho 90 lớp vật thể chuẩn COCO.
-- **Pipeline 2-Stage mạnh mẽ:**
-  - *Stage 1 (Phân đoạn cục bộ):* Dùng `SAM 2.1` để trích xuất mặt nạ hiển thị (Visible Mask) từ điểm click.
-  - *Stage 2 (Suy luận Amodal):* Dùng `Swin-UNet` phân tích đa kênh để dự đoán toàn bộ hình dáng vật thể.
-- **Tính toán hình học:** Tự động đối chiếu Visible Mask và Amodal Mask để tính toán diện tích che khuất và hiển thị trực quan phần bị lấp.
+## 🚀 Hướng Dẫn Chạy Trên Google Colab A100 (40GB/80GB VRAM)
 
-## 🧠 2. Kiến trúc Mô hình (Amodal Swin-UNet)
-Mô hình đã được nâng cấp lên cấu trúc 5-channel để tăng cường *Inductive Bias* cho mạng nơ-ron:
+Toàn bộ quá trình chuẩn bị dữ liệu, chạy huấn luyện 1 lần đầy đủ 6 cấu hình (Ablation Study) và tự động lưu trực tiếp vào Google Drive được đóng gói tại:
 
-- **Encoder:** Sử dụng backbone `timm` (`swin_tiny_patch4_window7_224`, pretrained). Patch Embedding được can thiệp sửa đổi để nhận **Input Tensor [B, 5, 224, 224]** bao gồm:
-  1. `Kênh 1-3:` Ảnh RGB (đã chuẩn hóa).
-  2. `Kênh 4:` Visible Mask (phần vật thể không bị che khuất).
-  3. `Kênh 5:` Edge Mask (ranh giới bị lấp, trích xuất bằng thuật toán hình thái học cv2.dilate/erode).
-- **Category Embedding:** Chuyển đổi class ID của vật thể thành vector nhúng 768 chiều và cộng vào bottleneck của mạng U-Net để gợi ý đặc trưng phân loại của vật thể cho decoder.
+👉 **[COLAB_A100_GUIDE.md](COLAB_A100_GUIDE.md)**: Cẩm nang hướng dẫn từng bước chi tiết.  
+👉 **[train_d2sa_colab_a100.ipynb](train_d2sa_colab_a100.ipynb)**: Jupyter Notebook sẵn sàng chạy 1-click trên Colab.
+
+---
+
+## 🧠 Kiến Trúc Mô Hình (Amodal Swin-UNet)
+
+- **Đầu vào (Input Tensor [B, 5, 224, 224]):**
+  1. `Kênh 1-3:` Ảnh RGB gốc.
+  2. `Kênh 4:` Visible Mask (phần nhìn thấy được).
+  3. `Kênh 5:` Edge Mask (ranh giới bị che khuất, sinh bằng phép giãn/xói mòn hình thái học).
+- **Encoder:** Backbone Swin Transformer (`swin_tiny_patch4_window7_224`, pretrained).
+- **Category Embedding:** Chuyển đổi class ID thành vector nhúng 768 chiều và cộng vào bottleneck của mạng U-Net.
 - **Decoder:** Khối 3 cấp `UpBlock` kết hợp `nn.Upsample(scale_factor=4)`.
-- **Head:** Lớp `Conv2d(64, 1, 1)` trả về logits. Kích thước output cuối cùng: `[B, 1, 224, 224]`.
+- **Head:** Lớp `Conv2d(64, 1, 1)` trả về logits nhị phân kích thước `[B, 1, 224, 224]`.
+- **Hàm mất mát chính:** Occlusion-Aware Loss (phạt 5x trên vùng bị che khuất) + Soft Dice Loss.
 
-> [!NOTE]
-> Cấu hình chính của dự án sử dụng **Occ-Aware Loss + Edge Mask + Category Embedding = True** (không sử dụng Spatial Attention). Đây chính là cấu hình tại Hàng 4 (**Row 4**) trong bảng nghiên cứu thực nghiệm Ablation Study.
+---
 
-## 🗂️ 3. Dữ liệu & Tiền xử lý
-- **Định dạng:** Tương tự COCOA format (`COCO_amodal_train2014.json`). Annotations chứa `regions`, `segmentation`, và `order`.
-- **Logic xử lý (Dataset):**
-  - Xóa phần bị che khuất dựa vào trường `order` (vật có order thấp hơn sẽ che vật cao hơn) để tạo Visible Mask mô phỏng.
-  - Sử dụng `albumentations` để resize đồng bộ (Image + Mask) về `224x224`.
-
-## 📂 4. Cấu trúc mã nguồn
-Dự án được tổ chức như sau:
+## 🗂️ Cấu Trúc Mã Nguồn
 
 ```text
 .
-├── app.py                  # Điểm khởi chạy giao diện tương tác (Gradio Web UI)
-├── requirements.txt        # Các thư viện phụ thuộc của dự án
-├── assets/                 # Hình ảnh minh họa (figures)
-│   └── figures/            # Các biểu đồ và sơ đồ cấu trúc của dự án
-├── checkpoints/            # Lưu trữ weights (sam2.1_b.pt, swin_amodal_epoch_30.pth)
-├── data/                   # Thư mục chứa dữ liệu huấn luyện và validation (COCO-Amodal)
-├── docs/                   # Tài liệu báo cáo, phân tích chiến lược occlusion
-├── results/                # Kết quả đánh giá và đo đạc hiệu năng mô hình dưới dạng JSON/PNG
-└── scripts/                # Các mã nguồn thực thi chính
-    ├── model.py            # Định nghĩa mô hình Swin-UNet (Cấu hình chính - Row 4)
-    ├── dataset.py          # Class xử lý dữ liệu và tiền xử lý ảnh đầu vào
-    ├── train.py            # Huấn luyện mô hình với Occlusion-Aware Loss
-    ├── evaluate.py         # Script đánh giá hiệu suất (Single-Image mIoU, Dice, Precision, Recall)
-    ├── train_kins.ipynb    # Jupyter notebook huấn luyện trên tập dữ liệu KINS
-    ├── README.md           # Hướng dẫn chi tiết về các cấu hình thực nghiệm (Ablation Study)
-    └── other_config_cocoa/ # Các cấu hình thực nghiệm khác trong bảng Ablation Study (Row 1, 2, 3, 5, 6)
+├── COLAB_A100_GUIDE.md         # 📖 Hướng dẫn chạy trọn gói trên Google Colab A100 & lưu Drive
+├── train_d2sa_colab_a100.ipynb # 🚀 Notebook 1-click huấn luyện 6 cấu hình trên Colab
+├── README.md                   # Giới thiệu tổng quan dự án
+├── requirements.txt            # Thư viện phụ thuộc
+├── app.py                      # Giao diện tương tác Gradio Web UI
+├── assets/                     # Hình ảnh minh họa & sơ đồ
+├── docs/                       # Tài liệu nghiên cứu khoa học cốt lõi
+│   ├── PROJECT_UNDERSTANDING.md
+│   ├── PROPOSED_METHOD.md
+│   ├── DATASET_INSTANCES_DETAILED.md
+│   └── TRAINING_SUMMARY.md
+└── scripts/                    # Mã nguồn huấn luyện & đánh giá
+    ├── model.py                # Kiến trúc Swin-UNet (Cấu hình chính - Row 4)
+    ├── dataset_d2sa.py         # Dataset loader cho MVTec D2SA
+    ├── train_d2sa.py           # Huấn luyện D2SA (Row 4)
+    ├── evaluate_d2sa.py        # Đánh giá D2SA (mIoU, Dice, Precision, Recall, Inv-mIoU)
+    ├── verify_d2sa_dataset.py  # Kiểm tra tính toàn vẹn dataset D2SA
+    ├── logging_utils.py        # Logging tức thời (flush, fsync, SIGTERM, PosPixels)
+    ├── run_ablation_d2sa.py    # Runner tự động chạy và tổng hợp Table V
+    ├── run_ablation_d2sa.sh    # Bash script chạy cụm GPU / Colab
+    ├── other_config_d2sa/      # 5 cấu hình ablation còn lại cho D2SA (Row 1, 2, 3, 5, 6)
+    ├── other_config_cocoa/     # Các cấu hình ablation cho COCOA
+    ├── dataset.py              # Dataset loader cho COCOA
+    ├── train.py                # Huấn luyện cho COCOA
+    ├── evaluate.py             # Đánh giá cho COCOA
+    └── train_kins.ipynb        # Huấn luyện trên KINS
 ```
 
-## 📊 5. Nghiên cứu Thực nghiệm (Ablation Study)
-Dự án hỗ trợ 6 cấu hình mô hình thực nghiệm khác nhau tương ứng với bảng so sánh **Table V: Ablation Study on COCOA Dataset** (bao gồm các thay đổi về hàm Loss, Edge Mask, Category Embedding và Spatial Attention).
+---
 
-![Table V: Ablation Study](./assets/Table.png)
+## 📊 Bảng Thực Nghiệm Ablation Study (Table V)
+
+Dự án hỗ trợ 6 cấu hình ablation đối chiếu trên 3 tập dữ liệu (**COCOA**, **KINS**, **D2SA**):
+
+| Row | Cấu hình | Kênh vào | Edge Mask | Category Embedding | Spatial Attention | Hàm mất mát (Loss) | Số tham số |
+|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **1** | Baseline (No Edge, No Emb) | 4 | ❌ | ❌ | ❌ | BCE | 34,352,027 |
+| **2** | + Edge Mask | 5 | ✅ | ❌ | ❌ | BCE | 34,353,563 |
+| **3** | + Occlusion-Aware Loss | 5 | ✅ | ❌ | ❌ | Occ-Aware (5x) + Dice | 34,353,563 |
+| **4** | **Main Config (+ Category Embedding)** | 5 | ✅ | ✅ | ❌ | Occ-Aware (5x) + Dice | **34,399,643** |
+| **5** | + Spatial Attention | 5 | ✅ | ❌ | ✅ | Occ-Aware (5x) + Dice | 34,353,661 |
+| **6** | Full Config (Emb + Spatial) | 5 | ✅ | ✅ | ✅ | Occ-Aware (5x) + Dice | 34,399,741 |

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ===================================================================================
-# BASH RUNNER CHO ABLATION STUDY D2SA (CHẠY TRÊN NVIDIA H200 141GB / LINUX / SLURM)
+# BASH RUNNER CHO ABLATION STUDY D2SA (TỐI ƯU CHO NVIDIA A100 40GB/80GB VRAM / COLAB)
 # ===================================================================================
 set -e
 
@@ -15,19 +15,27 @@ EPOCHS="${2:-${EPOCHS:-30}}"
 BATCH_SIZE="${3:-${BATCH_SIZE:-16}}"
 ACC_STEPS="${4:-${ACC_STEPS:-1}}"
 NUM_WORKERS="${5:-${NUM_WORKERS:-8}}"
-VAL_SUBSET_SIZE="${VAL_SUBSET_SIZE:-500}"
+VAL_SUBSET_SIZE="${VAL_SUBSET_SIZE:-0}"
 ROWS="${ROWS:-1 2 3 4 5 6}"
+DRIVE_DIR="${DRIVE_DIR:-}"
 
 echo "========================================================================"
-echo "🚀 ABLATION STUDY D2SA (MVTec D2S Amodal) - H200 RUNNER (141GB VRAM)"
-echo "   Thư mục dự án:  ${ROOT_DIR}"
-echo "   Các Row chạy:   ${ROWS}"
-echo "   Thiết bị GPU:   ${DEVICE}"
-echo "   Số Epoch:       ${EPOCHS}"
-echo "   Batch Size:     ${BATCH_SIZE} (Tích lũy ${ACC_STEPS} bước -> Effective Batch = $((BATCH_SIZE * ACC_STEPS)))"
-echo "   DataLoader:     ${NUM_WORKERS} workers"
-echo "   Val Subset Định kỳ: ${VAL_SUBSET_SIZE} mẫu (Epoch 30 cuối cùng sẽ evaluate full 15,654 mẫu)"
+echo "🚀 ABLATION STUDY D2SA (MVTec D2S Amodal) - NVIDIA A100 (40GB/80GB VRAM)"
+echo "   Thư mục dự án:      ${ROOT_DIR}"
+echo "   Các Row chạy:       ${ROWS}"
+echo "   Thiết bị GPU:       ${DEVICE}"
+echo "   Số Epoch:           ${EPOCHS}"
+echo "   Batch Size:         ${BATCH_SIZE} (Tích lũy ${ACC_STEPS} bước -> Effective = $((BATCH_SIZE * ACC_STEPS)))"
+echo "   DataLoader Workers: ${NUM_WORKERS}"
+if [ -n "${DRIVE_DIR}" ]; then
+  echo "   Google Drive Sync:  ${DRIVE_DIR}"
+fi
 echo "========================================================================"
+
+DRIVE_ARG=""
+if [ -n "${DRIVE_DIR}" ]; then
+  DRIVE_ARG="--drive-dir ${DRIVE_DIR}"
+fi
 
 # Chạy runner python chính
 python scripts/run_ablation_d2sa.py \
@@ -38,11 +46,11 @@ python scripts/run_ablation_d2sa.py \
     --accumulation-steps "${ACC_STEPS}" \
     --num-workers "${NUM_WORKERS}" \
     --val-subset-size "${VAL_SUBSET_SIZE}" \
-    --device "${DEVICE}"
+    --device "${DEVICE}" \
+    ${DRIVE_ARG}
 
 echo ""
 echo "========================================================================"
 echo "✅ Hoàn tất toàn bộ các cấu hình ablation trên D2SA!"
-echo "   Xem log chi tiết tại: logs/d2sa/"
-echo "   Xem checkpoint tại:   checkpoints/d2sa/"
+echo "   Bảng tổng hợp Table V: results/d2sa/table_v_summary.md"
 echo "========================================================================"

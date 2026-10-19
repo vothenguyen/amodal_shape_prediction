@@ -23,10 +23,13 @@
       ├── model.py            # Cấu hình chính Row 4
       ├── dataset.py          # AmodalDataset cho COCOA
       ├── train.py            # Train Row 4 cho COCOA
-      ├── evaluate.py         # Đánh giá single-image
-      ├── train_lambda.py     # Thử nghiệm nhiều occlusion_weight (1,3,5,7,10)
+      ├── train_d2sa.py       # Train Row 4 cho D2SA
+      ├── evaluate.py         # Đánh giá single-image cho COCOA
+      ├── evaluate_d2sa.py    # Đánh giá cho D2SA
       ├── train_kins.ipynb    # Notebook Colab train KINS (6 config)
-      └── other_config_cocoa/ # 5 biến thể ablation (Row 1,2,3,5,6)
+      ├── run_ablation_d2sa.py # Runner chạy tự động 6 cấu hình D2SA
+      ├── other_config_cocoa/ # 5 biến thể ablation COCOA (Row 1,2,3,5,6)
+      └── other_config_d2sa/  # 5 biến thể ablation D2SA (Row 1,2,3,5,6)
   ```
 
 ---
