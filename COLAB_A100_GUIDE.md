@@ -9,14 +9,14 @@
 
 ## 📊 1. BẢNG MAPPING 6 CẤU HÌNH CÓ SẴN TRÊN D2SA (TABLE V)
 
-| Row | Cấu hình trong code | Input | Edge Mask | Cat Emb (60) | Spatial Attn | Loss Function | Số tham số | VRAM trên A100 (Batch 16) |
-|:---:|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **1** | `other_config_d2sa/amodal-shape-prediction-no-spatial-no-embeding-rgb-vis-noedge-bce/` | **4ch** (RGB+Vis) | ❌ | ❌ | ❌ | BCEWithLogits | 34,352,027 | ~11.5 GB |
-| **2** | `other_config_d2sa/amodal-shape-prediction-no-spatial-no-embeding-rgb-vis-edge-bce/` | **5ch** (RGB+Vis+Edge) | ✅ | ❌ | ❌ | BCEWithLogits | 34,353,563 | ~12.0 GB |
-| **3** | `other_config_d2sa/amodal-shape-prediction-no-spatial-no-embeding/` | **5ch** (RGB+Vis+Edge) | ✅ | ❌ | ❌ | Occ-Aware (5x) + Dice | 34,353,563 | ~12.2 GB |
-| **4** | `scripts/train_d2sa.py` (**Cấu hình chính / Main Config**) | **5ch** (RGB+Vis+Edge) | ✅ | ✅ (60) | ❌ | Occ-Aware (5x) + Dice | **34,399,643** | ~12.8 GB |
-| **5** | `other_config_d2sa/amodal_shape_prediction_no_embeding/` | **5ch** (RGB+Vis+Edge) | ✅ | ❌ | ✅ (k=7) | Occ-Aware (5x) + Dice | 34,353,661 | ~12.5 GB |
-| **6** | `other_config_d2sa/amodal_shape_prediction_full_config/` | **5ch** (RGB+Vis+Edge) | ✅ | ✅ (60) | ✅ (k=7) | Occ-Aware (5x) + Dice | 34,399,741 | ~13.0 GB |
+|  Row  | Cấu hình trong code                                                                    |         Input          | Edge Mask | Cat Emb (60) | Spatial Attn |     Loss Function     |   Số tham số   | VRAM trên A100 (Batch 16) |
+| :---: | :------------------------------------------------------------------------------------- | :--------------------: | :-------: | :----------: | :----------: | :-------------------: | :------------: | :-----------------------: |
+| **1** | `other_config_d2sa/amodal-shape-prediction-no-spatial-no-embeding-rgb-vis-noedge-bce/` |   **4ch** (RGB+Vis)    |    ❌     |      ❌      |      ❌      |     BCEWithLogits     |   34,352,027   |         ~11.5 GB          |
+| **2** | `other_config_d2sa/amodal-shape-prediction-no-spatial-no-embeding-rgb-vis-edge-bce/`   | **5ch** (RGB+Vis+Edge) |    ✅     |      ❌      |      ❌      |     BCEWithLogits     |   34,353,563   |         ~12.0 GB          |
+| **3** | `other_config_d2sa/amodal-shape-prediction-no-spatial-no-embeding/`                    | **5ch** (RGB+Vis+Edge) |    ✅     |      ❌      |      ❌      | Occ-Aware (5x) + Dice |   34,353,563   |         ~12.2 GB          |
+| **4** | `scripts/train_d2sa.py` (**Cấu hình chính / Main Config**)                             | **5ch** (RGB+Vis+Edge) |    ✅     |   ✅ (60)    |      ❌      | Occ-Aware (5x) + Dice | **34,399,643** |         ~12.8 GB          |
+| **5** | `other_config_d2sa/amodal_shape_prediction_no_embeding/`                               | **5ch** (RGB+Vis+Edge) |    ✅     |      ❌      |   ✅ (k=7)   | Occ-Aware (5x) + Dice |   34,353,661   |         ~12.5 GB          |
+| **6** | `other_config_d2sa/amodal_shape_prediction_full_config/`                               | **5ch** (RGB+Vis+Edge) |    ✅     |   ✅ (60)    |   ✅ (k=7)   | Occ-Aware (5x) + Dice |   34,399,741   |         ~13.0 GB          |
 
 ---
 
@@ -26,6 +26,7 @@ Trong repo đã có sẵn file Notebook Jupyter được thiết kế chuyên bi
 👉 **[`train_d2sa_colab_a100.ipynb`](train_d2sa_colab_a100.ipynb)**
 
 ### Các bước thực hiện:
+
 1. Mở [Google Colab](https://colab.research.google.com/).
 2. Chọn **File** → **Upload notebook** → Chọn file `train_d2sa_colab_a100.ipynb`.
 3. Đổi môi trường thực thi: **Runtime** → **Change runtime type** → Chọn **A100 GPU** và **High-RAM**.
@@ -36,6 +37,7 @@ Trong repo đã có sẵn file Notebook Jupyter được thiết kế chuyên bi
 ## 💻 3. CÁCH 2: CHẠY TRỰC TIẾP QUA CÁC CELL TRÊN COLAB
 
 ### Cell 1: Kết nối Google Drive & Kiểm tra GPU A100 (40GB)
+
 ```python
 from google.colab import drive
 import os
@@ -57,6 +59,7 @@ print(f"✅ Dữ liệu checkpoints/logs sẽ lưu tại: {DRIVE_DIR}")
 ```
 
 ### Cell 2: Chuẩn Bị Source Code (Tự nhận diện Drive hoặc Git) & Cài Đặt Thư Viện
+
 ```python
 import os
 
@@ -73,13 +76,14 @@ else:
     print("🌐 Chưa có repo trên Drive, đang clone từ GitHub...")
     !git clone https://github.com/vothenguyen/amodal_shape_prediction.git {LOCAL_REPO}
     %cd {LOCAL_REPO}
-    !git checkout feat/d2sa
+    !git checkout !git checkout feat/colab-a100
 
 !pip install -q timm albumentations pycocotools opencv-python tqdm
 ```
 
 ### Cell 3: Tải Dữ Liệu D2SA Vào Ổ Cứng SSD Siêu Tốc Của Colab
-*(Tải 4.01 GB mất ~1-2 phút với băng thông của Colab. Ảnh được giải nén vào ổ SSD local để nạp dữ liệu nhanh nhất, trong khi kết quả checkpoint/log sẽ lưu vào Google Drive).*
+
+_(Tải 4.01 GB mất ~1-2 phút với băng thông của Colab. Ảnh được giải nén vào ổ SSD local để nạp dữ liệu nhanh nhất, trong khi kết quả checkpoint/log sẽ lưu vào Google Drive)._
 
 ```bash
 %%bash
@@ -113,6 +117,7 @@ python scripts/verify_d2sa_dataset.py
 ```
 
 ### Cell 4: 🔥 CHẠY 1 LẦN DUY NHẤT TOÀN BỘ 6 CẤU HÌNH (TABLE V)
+
 ```python
 # Lệnh tự động chạy tuần tự từ Row 1 đến Row 6:
 # - Mỗi cấu hình huấn luyện 30 epochs
@@ -133,6 +138,7 @@ python scripts/verify_d2sa_dataset.py
 ```
 
 ### Cell 5: Xem Bảng Tổng Hợp Table V Trực Tiếp Trên Colab
+
 ```python
 from IPython.display import display, Markdown
 
@@ -146,10 +152,12 @@ with open(table_path, "r", encoding="utf-8") as f:
 ## 🛡️ 4. KHẢ NĂNG PHỤC HỒI KHI BỊ NGẮT KẾT NỐI (RESUME)
 
 Nếu Colab bị gián đoạn giữa chừng do hết thời gian phiên (timeout) hoặc mất mạng:
+
 - Mọi checkpoint của từng epoch đã được ghi an toàn trên Google Drive (`swin_amodal_epoch_X.pth` và `last.pth`).
 - Trạng thái của AdamW moments và learning rate Cosine đã được bảo toàn nguyên vẹn 100%.
 
 Để tiếp tục huấn luyện một Row cụ thể từ epoch bị ngắt (ví dụ Row 4 tại epoch 15):
+
 ```python
 !python scripts/run_ablation_d2sa.py \
     --rows 4 \
