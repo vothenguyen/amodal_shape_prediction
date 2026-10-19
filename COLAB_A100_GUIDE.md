@@ -90,39 +90,74 @@ else:
 !pip install -q timm albumentations pycocotools opencv-python tqdm
 ```
 
-### Cell 3: Tải Dữ Liệu D2SA Vào Ổ Cứng SSD Siêu Tốc Của Colab
+### Cell 3: Thiết Lập & Tự Động Kết Nối Dữ Liệu D2SA
 
-_(Tải 4.01 GB mất ~1-2 phút với băng thông của Colab. Ảnh được giải nén vào ổ SSD local để nạp dữ liệu nhanh nhất, trong khi kết quả checkpoint/log sẽ lưu vào Google Drive)._
+_(Tập dữ liệu D2SA gồm 3 file annotation `.json` (~15.3 MB) và thư mục `images/` gồm 22,562 file ảnh ~4 GB)._
 
-```bash
-%%bash
-mkdir -p data/D2SA
-cd data/D2SA
+> 💡 **Khuyên dùng:** Nếu bạn đã tải hoặc sao chép thư mục `D2SA` lên Google Drive (tại `/content/drive/MyDrive/amodal_shape_prediction/data/D2SA` hoặc `MyDrive/D2SA`), đoạn mã dưới đây sẽ tự động nhận diện và tạo liên kết tượng trưng (symlink) tức thì sang ổ SSD Colab!
 
-# 1. Tải và giải nén Annotations (15.3 MB)
-if [ ! -f "D2S_amodal_training_rot0.json" ]; then
-    echo "📥 Đang tải Annotations D2SA..."
-    curl -L -o "d2s_amodal_annotations_v1.tar.xz" \
-        "https://www.mydrive.ch/shares/39000/993e79a47832a8ea7208a14d8b277c35/download/420938643-1629954673/d2s_amodal_annotations_v1.tar.xz" --progress-bar
-    tar -xf d2s_amodal_annotations_v1.tar.xz
-    rm -f d2s_amodal_annotations_v1.tar.xz
-fi
+```python
+import os
+import shutil
 
-# 2. Tải và giải nén Images (4.01 GB gồm 22,562 ảnh)
-if [ ! -d "images" ] || [ $(ls -1 images 2>/dev/null | wc -l) -lt 20000 ]; then
-    echo "📥 Đang tải Images D2SA (~4 GB)..."
-    curl -L -o "d2s_amodal_images_v1.tar.xz" \
-        -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36" \
-        -H "Referer: https://www.mvtec.com/research-teaching/datasets/mvtec-d2s/downloads" \
-        --connect-timeout 30 --max-time 7200 --progress-bar \
-        "https://www.mydrive.ch/shares/39000/993e79a47832a8ea7208a14d8b277c35/download/420939124-1629954676/d2s_amodal_images_v1.tar.xz"
-    tar -xf d2s_amodal_images_v1.tar.xz
-    rm -f d2s_amodal_images_v1.tar.xz
-fi
+LOCAL_DATA_DIR = "/content/amodal_shape_prediction/data/D2SA"
+os.makedirs("/content/amodal_shape_prediction/data", exist_ok=True)
 
-echo "✅ Kiểm tra tính toàn vẹn dataset:"
-cd ../..
-python scripts/verify_d2sa_dataset.py
+# 1. Danh sách các vị trí ứng viên trên Google Drive
+CANDIDATES = [
+    "/content/drive/MyDrive/amodal_shape_prediction/data/D2SA",
+    "/content/drive/MyDrive/D2SA",
+    "/content/drive/MyDrive/data/D2SA",
+    "/content/data/D2SA"
+]
+
+req_file = "D2S_amodal_training_rot0.json"
+found_drive_path = None
+
+for cand in CANDIDATES:
+    if os.path.exists(os.path.join(cand, req_file)) and os.path.isdir(os.path.join(cand, "images")):
+        found_drive_path = cand
+        break
+
+if found_drive_path:
+    print(f"📁 Tìm thấy bộ dữ liệu D2SA đầy đủ trên Google Drive tại: {found_drive_path}")
+    if os.path.exists(LOCAL_DATA_DIR) and os.path.islink(LOCAL_DATA_DIR):
+        os.unlink(LOCAL_DATA_DIR)
+    elif os.path.exists(LOCAL_DATA_DIR) and not os.listdir(LOCAL_DATA_DIR):
+        os.rmdir(LOCAL_DATA_DIR)
+    
+    if not os.path.exists(LOCAL_DATA_DIR):
+        print(f"🔗 Tạo symbolic link từ Google Drive sang SSD Colab: {LOCAL_DATA_DIR}...")
+        os.symlink(found_drive_path, LOCAL_DATA_DIR, target_is_directory=True)
+        print("✅ Kết nối dữ liệu thành công qua symlink!")
+    else:
+        print("✅ Thư mục cục bộ đã sẵn sàng dữ liệu.")
+else:
+    # Kiểm tra xem có file nén .zip trên Drive không để giải nén tự động
+    zip_candidates = [
+        "/content/drive/MyDrive/amodal_shape_prediction/data/D2SA.zip",
+        "/content/drive/MyDrive/D2SA.zip",
+        "/content/drive/MyDrive/d2s_amodal.zip",
+    ]
+    unzipped = False
+    for zpath in zip_candidates:
+        if os.path.exists(zpath):
+            print(f"📦 Phát hiện file nén trên Drive: {zpath}. Đang giải nén vào {LOCAL_DATA_DIR}...")
+            os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+            !unzip -q "{zpath}" -d "{LOCAL_DATA_DIR}"
+            unzipped = True
+            break
+            
+    if not unzipped:
+        print("⚠️ Chưa phát hiện thư mục D2SA trên Google Drive!")
+        print("💡 HƯỚNG DẪN ĐƯA DỮ LIỆU LÊN COLAB:")
+        print("  Cách 1 (Khuyên dùng): Tải thư mục 'D2SA' (chứa images/ và 3 file JSON) lên Google Drive tại:")
+        print("         /content/drive/MyDrive/amodal_shape_prediction/data/D2SA/")
+        print("  Cách 2: Giải nén hoặc kéo thả trực tiếp thư mục D2SA vào ổ SSD Colab tại:")
+        print("         /content/amodal_shape_prediction/data/D2SA/")
+
+# Kiểm tra tính toàn vẹn
+!python scripts/verify_d2sa_dataset.py
 ```
 
 ### Cell 4: 🔥 CHẠY 1 LẦN DUY NHẤT TOÀN BỘ 6 CẤU HÌNH (TABLE V)

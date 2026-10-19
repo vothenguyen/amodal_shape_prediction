@@ -243,6 +243,57 @@ def main():
         print(f"   Results:       {base_results_dir}/d2sa/")
     print("=" * 75)
 
+    # ─────────────────────────────────────────────────────────────────
+    # KIỂM TRA & TỰ ĐỘNG PHÁT HIỆN DỮ LIỆU D2SA
+    # ─────────────────────────────────────────────────────────────────
+    local_data_dir = os.path.join(ROOT_DIR, "data", "D2SA")
+    candidate_drive_dirs = []
+    if args.drive_dir:
+        candidate_drive_dirs.append(os.path.join(args.drive_dir, "data", "D2SA"))
+        candidate_drive_dirs.append(os.path.join(args.drive_dir, "D2SA"))
+    candidate_drive_dirs.extend([
+        "/content/drive/MyDrive/amodal_shape_prediction/data/D2SA",
+        "/content/drive/MyDrive/D2SA",
+        "/content/data/D2SA"
+    ])
+
+    # Nếu thư mục local chưa có data, kiểm tra xem có trên Google Drive không để tạo symlink tự động
+    req_json = "D2S_amodal_training_rot0.json"
+    if not os.path.exists(os.path.join(local_data_dir, req_json)):
+        for cand in candidate_drive_dirs:
+            if os.path.exists(os.path.join(cand, req_json)):
+                print(f"\n🔗 Phát hiện dataset D2SA tại Google Drive: {cand}")
+                print(f"   Đang tạo liên kết tượng trưng (symlink) sang: {local_data_dir}...")
+                os.makedirs(os.path.dirname(local_data_dir), exist_ok=True)
+                try:
+                    if os.path.exists(local_data_dir) and os.path.islink(local_data_dir):
+                        os.unlink(local_data_dir)
+                    os.symlink(cand, local_data_dir, target_is_directory=True)
+                    print("   ✅ Đã kết nối dataset thành công qua symlink!")
+                    break
+                except Exception as e_link:
+                    print(f"   ⚠️ Không thể tạo symlink ({e_link}), vui lòng copy dữ liệu vào {local_data_dir}")
+
+    # Tiền kiểm tra tính sẵn sàng của tập dữ liệu
+    if args.mode in ["train", "all"]:
+        has_train_json = os.path.exists(os.path.join(local_data_dir, req_json))
+        has_img_dir = os.path.isdir(os.path.join(local_data_dir, "images"))
+        if not has_train_json or not has_img_dir:
+            print("\n" + "❌" * 38)
+            print("LỖI: TẬP DỮ LIỆU D2SA CHƯA SẴN SÀNG ĐỂ HUẤN LUYỆN!")
+            print(f"Thư mục cần kiểm tra: {local_data_dir}")
+            if not has_train_json:
+                print(f"  ❌ Thiếu file: {req_json}")
+            if not has_img_dir:
+                print(f"  ❌ Thiếu thư mục ảnh: images/")
+            print("\nHƯỚNG DẪN KHẮC PHỤC:")
+            print("  1. Đặt thư mục 'D2SA' vào Google Drive tại: /content/drive/MyDrive/amodal_shape_prediction/data/D2SA")
+            print("     (Bao gồm 3 file JSON annotations và thư mục images/)")
+            print("  2. Hoặc giải nén trực tiếp vào ổ SSD Colab tại: /content/amodal_shape_prediction/data/D2SA")
+            print("  3. Sau đó chạy lại lệnh này.")
+            print("❌" * 38 + "\n")
+            sys.exit(1)
+
     success_rows = []
     failed_rows = []
 
