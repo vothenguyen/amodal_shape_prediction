@@ -65,18 +65,27 @@ import os
 
 DRIVE_REPO = "/content/drive/MyDrive/amodal_shape_prediction"
 LOCAL_REPO = "/content/amodal_shape_prediction"
+BRANCH = "feat/colab-a100"
 
-# Nếu đã upload thư mục amodal_shape_prediction lên Google Drive:
+# 1. Nếu đã upload thư mục amodal_shape_prediction lên Google Drive:
 if os.path.exists(os.path.join(DRIVE_REPO, "scripts")):
     print("📁 Phát hiện repo có sẵn trên Google Drive! Sao chép sang SSD Colab để nạp code siêu nhanh...")
-    !cp -r {DRIVE_REPO} {LOCAL_REPO}
+    os.makedirs(LOCAL_REPO, exist_ok=True)
+    !cp -rn {DRIVE_REPO}/* {LOCAL_REPO}/ 2>/dev/null || cp -r {DRIVE_REPO}/* {LOCAL_REPO}/
     %cd {LOCAL_REPO}
-# Nếu chưa có trên Drive -> tự động clone từ GitHub:
+# 2. Nếu repo cục bộ đã tồn tại (đã clone từ trước trên Colab):
+elif os.path.exists(os.path.join(LOCAL_REPO, ".git")):
+    print(f"🔄 Thư mục cục bộ đã tồn tại, đang fetch và chuyển sang branch {BRANCH}...")
+    %cd {LOCAL_REPO}
+    !git fetch origin
+    !git checkout {BRANCH}
+    !git pull origin {BRANCH}
+# 3. Nếu chưa có trên Drive và chưa có cục bộ -> clone trực tiếp branch từ GitHub:
 else:
-    print("🌐 Chưa có repo trên Drive, đang clone từ GitHub...")
-    !git clone https://github.com/vothenguyen/amodal_shape_prediction.git {LOCAL_REPO}
+    print(f"🌐 Chưa có repo, đang clone branch {BRANCH} từ GitHub...")
+    !rm -rf {LOCAL_REPO}
+    !git clone -b {BRANCH} https://github.com/vothenguyen/amodal_shape_prediction.git {LOCAL_REPO}
     %cd {LOCAL_REPO}
-    !git checkout !git checkout feat/colab-a100
 
 !pip install -q timm albumentations pycocotools opencv-python tqdm
 ```
