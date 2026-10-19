@@ -122,7 +122,7 @@ def evaluate_validation(model, val_loader, device, threshold=0.5):
     total_pixels = 0
 
     with torch.no_grad():
-        for inputs, targets, _, class_ids in val_loader:
+        for inputs, targets, _, class_ids in tqdm(val_loader, desc="Validation", leave=False):
             inputs = inputs.to(device, non_blocking=True)
             class_ids = class_ids.to(device, non_blocking=True)
             outputs = model(inputs, class_ids)
