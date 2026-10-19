@@ -181,7 +181,7 @@ def generate_table_v_summary(rows_to_check, base_results_dir):
 
     for item in summary_data:
         lines.append(
-            f"| **{item['row']}** | {item['name'][:25]} | {item['input'][:5]} | {item['edge']} | {item['emb']} | {item['spatial']} | {item['loss']} | **{item['mIoU']:.2f}** | {item['dice']:.2f} | {item['precision']:.2f} | {item['recall']:.2f} | **{item['inv_mIoU']:.2f}** |"
+            f"| **{item['row']}** | {item['name']} | {item['input']} | {item['edge']} | {item['emb']} | {item['spatial']} | {item['loss']} | **{item['mIoU']:.2f}** | {item['dice']:.2f} | {item['precision']:.2f} | {item['recall']:.2f} | **{item['inv_mIoU']:.2f}** |"
         )
     lines.append("=" * 90)
 
