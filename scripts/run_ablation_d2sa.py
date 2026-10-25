@@ -2,13 +2,14 @@
 ===================================================================================
 RUN ABLATION D2SA - Chạy toàn bộ hoặc từng cấu hình ablation trên D2SA
 ===================================================================================
-Script tự động hóa huấn luyện và đánh giá 6 cấu hình ablation trên D2SA:
+Script tự động hóa huấn luyện và đánh giá các cấu hình ablation trên D2SA:
 - Row 1: 4ch (RGB+Vis) | No Edge | No Emb | No Spatial | BCE Loss
 - Row 2: 5ch (RGB+Vis+Edge) | Edge | No Emb | No Spatial | BCE Loss
 - Row 3: 5ch (RGB+Vis+Edge) | Edge | No Emb | No Spatial | Occ-Aware Loss (5x)
 - Row 4: 5ch (RGB+Vis+Edge) | Edge | Emb (60) | No Spatial | Occ-Aware Loss (5x) [Main]
 - Row 5: 5ch (RGB+Vis+Edge) | Edge | No Emb | Spatial Attn | Occ-Aware Loss (5x)
 - Row 6: 5ch (RGB+Vis+Edge) | Edge | Emb (60) | Spatial Attn | Occ-Aware Loss (5x) [Full]
+- Row 7: 5ch (RGB+Vis+Edge) | Edge | Emb (60) | SGGatedBottleneck | Occ-Aware Loss (5x) [Proposed SG-GBA]
 
 Ví dụ sử dụng:
   # Chạy thử smoke test 6 config trên subset 30 mẫu, 1 epoch:
@@ -81,6 +82,13 @@ CONFIG_MAP = {
         "ckpt_dir": os.path.join(ROOT_DIR, "checkpoints", "d2sa", "amodal_shape_prediction_full_config"),
         "log_dir": os.path.join(ROOT_DIR, "logs", "d2sa", "row6_full_config"),
     },
+    7: {
+        "name": "Row 7 (Proposed SG-GBA: 5ch, OccLoss 5x, Edge, Emb 60, SGGatedBottleneck)",
+        "train_script": os.path.join(SCRIPTS_DIR, "other_config_d2sa", "amodal_shape_prediction_sg_gba_bottleneck", "train_d2sa.py"),
+        "eval_script": os.path.join(SCRIPTS_DIR, "other_config_d2sa", "amodal_shape_prediction_sg_gba_bottleneck", "evaluate_d2sa.py"),
+        "ckpt_dir": os.path.join(ROOT_DIR, "checkpoints", "d2sa", "row7_sg_gba_bottleneck"),
+        "log_dir": os.path.join(ROOT_DIR, "logs", "d2sa", "row7_sg_gba_bottleneck"),
+    },
 }
 
 
@@ -97,15 +105,15 @@ def run_command(cmd, desc):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ablation Runner cho D2SA (6 cấu hình)")
-    parser.add_argument("--rows", nargs="+", type=int, default=[1, 2, 3, 4, 5, 6], help="Danh sách Row cần chạy (1–6)")
+    parser = argparse.ArgumentParser(description="Ablation Runner cho D2SA (7 cấu hình)")
+    parser.add_argument("--rows", nargs="+", type=int, default=[1, 2, 3, 4, 5, 6, 7], help="Danh sách Row cần chạy (1–7)")
     parser.add_argument("--mode", type=str, choices=["train", "eval", "all"], default="all", help="Chế độ: train, eval, hoặc all")
     parser.add_argument("--epochs", type=int, default=30, help="Số epoch huấn luyện")
-    parser.add_argument("--batch-size", type=int, default=16, help="Batch size (Mặc định 16 tối ưu cho NVIDIA H200 141GB)")
-    parser.add_argument("--accumulation-steps", type=int, default=1, help="Gradient accumulation steps (Mặc định 1 cho H200)")
+    parser.add_argument("--batch-size", type=int, default=4, help="Batch size")
+    parser.add_argument("--accumulation-steps", type=int, default=4, help="Gradient accumulation steps")
     parser.add_argument("--subset-size", type=int, default=0, help="Số mẫu huấn luyện (0: toàn bộ)")
     parser.add_argument("--val-subset-size", type=int, default=0, help="Số mẫu validation/đánh giá (0: toàn bộ)")
-    parser.add_argument("--num-workers", type=int, default=8, help="Số workers cho DataLoader (Mặc định 8 cho máy chủ H200)")
+    parser.add_argument("--num-workers", type=int, default=2, help="Số workers cho DataLoader")
     parser.add_argument("--device", type=str, default="auto", help="Thiết bị: auto, cuda, cpu")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--resume-epoch", type=int, default=0, help="Epoch tiếp tục huấn luyện (0: từ đầu)")
@@ -130,7 +138,7 @@ def main():
 
     for r in sorted(args.rows):
         if r not in CONFIG_MAP:
-            print(f"⚠️ Row {r} không hợp lệ (chỉ hỗ trợ 1..6)")
+            print(f"⚠️ Row {r} không hợp lệ (chỉ hỗ trợ 1..7)")
             continue
 
         cfg = CONFIG_MAP[r]
