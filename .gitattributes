@@ -1,0 +1,10 @@
+
+# Set default behavior to automatically handle line endings
+* text=auto
+
+# Ensure shell scripts always have LF line endings on all systems (Linux/macOS/Windows)
+*.sh text eol=lf
+
+* text=auto
+*.py text eol=lf
+*.md text eol=lf

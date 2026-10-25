@@ -11,10 +11,15 @@ data/
 dataset/
 
 # Thư mục chứa model checkpoints (Tránh đẩy file .pt, .pth lên Git vì quá nặng)
-checkpoints/*.pt
-checkpoints/*.pth
+checkpoints/
 models/
+*.pt
 *.pth
+
+# Thư mục logs & telemetry
+logs/
+*.log
+*.jsonl
 
 # Kết quả chạy (Outputs)
 results/
@@ -33,3 +38,6 @@ runs/
 # Cho phép đẩy thư mục assets (hình ảnh minh họa, bảng biểu) lên Git
 !assets/
 !assets/**
+
+# Temporary scratch scripts
+scratch/
