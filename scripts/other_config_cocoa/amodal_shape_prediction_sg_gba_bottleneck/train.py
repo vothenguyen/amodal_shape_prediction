@@ -8,8 +8,8 @@ Cấu hình: Row 7 trong Ablation Study (Kiến trúc đề xuất mới cho Kh�
 - Bottleneck Attention: SGGatedBottleneck (FiLM điều biến ngữ nghĩa + Chú ý không gian 7x7 + Residual Gate)
 - Spatial Attention ở cuối Decoder: Tắt (khắc phục Spatial Attention Paradox)
 - Hàm mất mát: Occlusion-Aware Loss (5x weight cho vùng bị che khuất) + Dice Loss
-- Effective batch size: 16 (batch_size=4, accumulation_steps=4)
-- Optimizer: AdamW (lr=1e-4), Cosine Annealing LR
+- Tối ưu hóa A100: batch_size=16, num_workers=8, pin_memory=True, PyTorch AMP (FP16)
+- Hỗ trợ resume mượt mà từ epoch bất kỳ (--resume-epoch N)
 
 Chạy: python scripts/other_config_cocoa/amodal_shape_prediction_sg_gba_bottleneck/train.py
 ===================================================================================
@@ -17,6 +17,7 @@ Chạy: python scripts/other_config_cocoa/amodal_shape_prediction_sg_gba_bottlen
 
 import os
 import sys
+import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -66,19 +67,22 @@ class OcclusionAwareLoss(nn.Module):
         return weighted_bce + dice_loss.mean()
 
 
-def train():
+def train(args):
     # ─────────────────────────────────────────────────────────────────
     # THIẾT LẬP SIÊU THAM SỐ
     # ─────────────────────────────────────────────────────────────────
-    BATCH_SIZE = 4
-    ACCUMULATION_STEPS = 4
-    EPOCHS = 30
-    LEARNING_RATE = 1e-4
-    RESUME_EPOCH = 0
+    BATCH_SIZE = args.batch_size
+    ACCUMULATION_STEPS = args.accumulation_steps
+    EPOCHS = args.epochs
+    LEARNING_RATE = args.lr
+    RESUME_EPOCH = args.resume_epoch
     EXPECTED_PARAMS = 34_867_566
 
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"🚀 Huấn luyện Row 7 COCOA (SG-GBA) trên thiết bị: {DEVICE}")
+    DEVICE = torch.device(args.device if args.device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
+    USE_AMP = args.amp and (DEVICE.type == "cuda")
+
+    print(f"🚀 Huấn luyện Row 7 COCOA (SG-GBA) trên thiết bị: {DEVICE} (AMP: {USE_AMP})")
+    print(f"⚡ Batch Size: {BATCH_SIZE} | Acc Steps: {ACCUMULATION_STEPS} | Workers: {args.num_workers}")
 
     # ─────────────────────────────────────────────────────────────────
     # CHUẨN BỊ DỮ LIỆU
@@ -96,7 +100,14 @@ def train():
 
     print("📂 Chuẩn bị DataLoader với data augmentation...")
     train_dataset = AmodalDataset(img_dir=img_dir, ann_file=ann_file, transform=train_transform)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=(DEVICE.type == "cuda"),
+        prefetch_factor=2 if args.num_workers > 0 else None
+    )
 
     # ─────────────────────────────────────────────────────────────────
     # KHỞI TẠO MÔ HÌNH & ASSERTION SỐ LƯỢNG THAM SỐ
@@ -112,8 +123,13 @@ def train():
     if RESUME_EPOCH > 0:
         weight_path = os.path.join(ckpt_dir, f"swin_amodal_epoch_{RESUME_EPOCH}.pth")
         if os.path.exists(weight_path):
-            model.load_state_dict(torch.load(weight_path, map_location=DEVICE))
-            print(f"\n🔄 Tiếp tục từ Epoch {RESUME_EPOCH}: Đã nạp trọng số từ checkpoint!")
+            ckpt = torch.load(weight_path, map_location=DEVICE)
+            state_dict = ckpt["model_state_dict"] if isinstance(ckpt, dict) and "model_state_dict" in ckpt else ckpt
+            model.load_state_dict(state_dict)
+            print(f"\n🔄 Tiếp tục từ Epoch {RESUME_EPOCH}: Đã nạp trọng số từ checkpoint: {weight_path}")
+        else:
+            print(f"⚠️ Cảnh báo: Không tìm thấy checkpoint tại {weight_path}, sẽ huấn luyện từ đầu!")
+            RESUME_EPOCH = 0
 
     # ─────────────────────────────────────────────────────────────────
     # LOSS FUNCTION & OPTIMIZER
@@ -121,13 +137,20 @@ def train():
     criterion = OcclusionAwareLoss(occlusion_weight=5.0)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
+    scaler = torch.cuda.amp.GradScaler(enabled=USE_AMP)
+
+    # Tua nhanh scheduler nếu resume
+    if RESUME_EPOCH > 0:
+        for _ in range(RESUME_EPOCH):
+            scheduler.step()
+        print(f"⚡ Fast-forward LR Scheduler về Epoch {RESUME_EPOCH} (LR: {scheduler.get_last_lr()[0]:.2e})")
 
     print(f"\n🔥 BẮT ĐẦU HUẤN LUYỆN ROW 7 (SG-GBA): Epoch {RESUME_EPOCH + 1} → {EPOCHS} 🔥")
     print("=" * 70)
 
     for epoch in range(RESUME_EPOCH, EPOCHS):
         model.train()
-        total_loss = 0
+        total_loss = 0.0
         optimizer.zero_grad()
 
         progress_bar = tqdm(
@@ -137,26 +160,35 @@ def train():
         )
 
         for i, (inputs, targets, occluded, class_ids) in progress_bar:
-            inputs = inputs.to(DEVICE)
-            targets = targets.unsqueeze(1).float().to(DEVICE)
-            occluded = occluded.unsqueeze(1).float().to(DEVICE)
-            class_ids = class_ids.to(DEVICE)
+            inputs = inputs.to(DEVICE, non_blocking=True)
+            targets = targets.unsqueeze(1).float().to(DEVICE, non_blocking=True)
+            occluded = occluded.unsqueeze(1).float().to(DEVICE, non_blocking=True)
+            class_ids = class_ids.to(DEVICE, non_blocking=True)
 
-            outputs = model(inputs, class_ids)
-            loss = criterion(outputs, targets, occluded)
+            with torch.cuda.amp.autocast(enabled=USE_AMP):
+                outputs = model(inputs, class_ids)
+                loss = criterion(outputs, targets, occluded)
+                if ACCUMULATION_STEPS > 1:
+                    loss = loss / ACCUMULATION_STEPS
 
-            loss = loss / ACCUMULATION_STEPS
-            loss.backward()
+            if USE_AMP:
+                scaler.scale(loss).backward()
+                if ((i + 1) % ACCUMULATION_STEPS == 0) or ((i + 1) == len(train_loader)):
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+            else:
+                loss.backward()
+                if ((i + 1) % ACCUMULATION_STEPS == 0) or ((i + 1) == len(train_loader)):
+                    optimizer.step()
+                    optimizer.zero_grad()
 
-            if ((i + 1) % ACCUMULATION_STEPS == 0) or ((i + 1) == len(train_loader)):
-                optimizer.step()
-                optimizer.zero_grad()
-
-            actual_loss = loss.item() * ACCUMULATION_STEPS
+            actual_loss = loss.item() * (ACCUMULATION_STEPS if ACCUMULATION_STEPS > 1 else 1)
             total_loss += actual_loss
             progress_bar.set_postfix(
                 loss=f"{actual_loss:.4f}",
-                alpha=f"{float(model.sg_bottleneck.alpha.item()):.4f}"
+                alpha=f"{float(model.sg_bottleneck.alpha.item()):.4f}",
+                lr=f"{scheduler.get_last_lr()[0]:.2e}"
             )
 
         scheduler.step()
@@ -170,5 +202,19 @@ def train():
         print(f"💾 Checkpoint lưu tại: {save_path}\n")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Huấn luyện Row 7 COCOA (SG-GBA)")
+    parser.add_argument("--batch-size", type=int, default=16, help="Batch size (mặc định 16 cho A100)")
+    parser.add_argument("--accumulation-steps", type=int, default=1, help="Số bước tích lũy gradient")
+    parser.add_argument("--epochs", type=int, default=30, help="Tổng số epoch")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Tốc độ học AdamW")
+    parser.add_argument("--num-workers", type=int, default=8, help="Số luồng CPU nạp dữ liệu (mặc định 8)")
+    parser.add_argument("--resume-epoch", type=int, default=0, help="Epoch muốn resume (0: chạy từ đầu)")
+    parser.add_argument("--amp", action="store_true", default=True, help="Bật Mixed Precision FP16")
+    parser.add_argument("--device", type=str, default="auto", help="Thiết bị: auto, cuda, cpu")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    train()
+    args = parse_args()
+    train(args)
