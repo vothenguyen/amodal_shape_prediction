@@ -41,7 +41,7 @@ drive.mount('/content/drive')
 
 %cd /content
 !rm -rf amodal_shape_prediction
-!git clone [https://github.com/vothenguyen/amodal_shape_prediction.git](https://github.com/vothenguyen/amodal_shape_prediction.git)
+!git clone -b new_framework https://github.com/vothenguyen/amodal_shape_prediction.git
 %cd /content/amodal_shape_prediction
 
 # Tạo thư mục trên Drive để lưu bền vững checkpoints, logs, results
