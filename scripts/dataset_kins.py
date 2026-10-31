@@ -15,11 +15,10 @@ Tính năng:
 
 import os
 import cv2
-import torch
 import numpy as np
+import torch
 from torch.utils.data import Dataset
 from pycocotools.coco import COCO
-
 
 class KINSDataset(Dataset):
     """
@@ -32,7 +31,11 @@ class KINSDataset(Dataset):
     """
     def __init__(self, img_dir, ann_file, transform=None):
         self.img_dir = img_dir
+        self.ann_file = ann_file
         self.transform = transform
+
+        if not os.path.exists(ann_file):
+            raise FileNotFoundError(f"Annotation file not found: {ann_file}")
 
         print(f"📂 Đang nạp file annotation KINS: {ann_file}...")
         self.coco = COCO(ann_file)
@@ -47,7 +50,7 @@ class KINSDataset(Dataset):
 
     def get_mask(self, ann, key):
         temp_ann = ann.copy()
-        temp_ann['segmentation'] = temp_ann[key]
+        temp_ann['segmentation'] = ann[key]
         return self.coco.annToMask(temp_ann)
 
     def __len__(self):
@@ -72,34 +75,34 @@ class KINSDataset(Dataset):
         amodal_mask = self.get_mask(ann, 'a_segm')
         visible_mask = self.get_mask(ann, 'i_segm')
 
-        kernel = np.ones((5, 5), np.uint8)
-        dilated = cv2.dilate(visible_mask, kernel, iterations=1)
-        eroded = cv2.erode(visible_mask, kernel, iterations=1)
-        edge_mask = (dilated - eroded)
+        # Toán tử hình thái sinh edge mask
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        edge_mask = cv2.dilate(visible_mask, kernel, iterations=1) - cv2.erode(visible_mask, kernel, iterations=1)
 
+        # Tính occluded mask
         occluded_mask = np.clip(amodal_mask.astype(np.int32) - visible_mask.astype(np.int32), 0, 1).astype(np.uint8)
 
-        if self.transform:
+        if self.transform is not None:
             augmented = self.transform(
                 image=image,
-                masks=[amodal_mask, visible_mask, edge_mask, occluded_mask]
+                masks=[visible_mask, edge_mask, amodal_mask, occluded_mask]
             )
             image = augmented['image']
-            amodal_mask, visible_mask, edge_mask, occluded_mask = augmented['masks']
+            visible_mask = augmented['masks'][0]
+            edge_mask = augmented['masks'][1]
+            amodal_mask = augmented['masks'][2]
+            occluded_mask = augmented['masks'][3]
 
-        image = image.astype(np.float32) / 255.0
-        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-        image = (image - mean) / std
-        image = image.transpose(2, 0, 1)
+        if not isinstance(image, torch.Tensor):
+            image = torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
 
         input_5ch = torch.cat([
-            torch.from_numpy(image).float(),
+            image,
             torch.from_numpy(visible_mask).float().unsqueeze(0),
             torch.from_numpy(edge_mask).float().unsqueeze(0)
         ], dim=0)
 
-        class_id = torch.tensor(ann['category_id'], dtype=torch.long)
+        class_id = torch.tensor(ann.get('category_id', ann.get('category', 0)), dtype=torch.long)
 
         return (
             input_5ch,
