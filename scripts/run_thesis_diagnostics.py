@@ -60,7 +60,7 @@ from scripts.other_config_d2sa.amodal_shape_prediction_sg_gba_bottleneck.model i
     SGGatedBottleneck
 )
 from scripts.dataset_d2sa import AmodalDatasetD2SA
-from scripts.dataset import AmodalDataset as CocoaDataset
+from scripts.dataset import AmodalDataset as CocoaDataset, extract_cocoa_category_id
 try:
     from scripts.dataset_kins import KINSDataset
 except ImportError:
@@ -268,20 +268,21 @@ def count_train_instances_d2sa(train_ann_tuple):
 
 
 def count_train_instances_cocoa(train_ann_path):
-    """Đếm số instance mỗi lớp trong tập train COCOA."""
+    """Đếm số instance mỗi lớp trong tập train COCOA bằng extract_cocoa_category_id."""
     counts = Counter()
     if not train_ann_path or not os.path.exists(train_ann_path):
         return counts
     with open(train_ann_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     for ann in data.get("annotations", []):
-        cat_id = ann.get("category_id", 0)
         if "regions" in ann:
             for r in ann["regions"]:
                 if "segmentation" in r:
-                    counts[cat_id] += 1
+                    cid = extract_cocoa_category_id(r, ann, num_classes=91)
+                    counts[cid] += 1
         elif "segmentation" in ann:
-            counts[cat_id] += 1
+            cid = extract_cocoa_category_id(ann, ann, num_classes=91)
+            counts[cid] += 1
     return counts
 
 
