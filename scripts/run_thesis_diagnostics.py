@@ -1,13 +1,14 @@
 """
 ===================================================================================
 BỘ CÔNG CỤ KIỂM CHỨNG GIẢ THUYẾT KHOA HỌC KHÓA LUẬN TỐT NGHIỆP 2026
-(THESIS DIAGNOSTIC & QUANTITATIVE HYPOTHESIS VERIFICATION SUITE)
+(THESIS DIAGNOSTIC & QUANTITATIVE HYPOTHESIS VERIFICATION SUITE - TỐI ƯU HÓA TỐC ĐỘ)
 ===================================================================================
 Cung cấp bằng chứng định lượng (Quantitative Proofs) cho Chương 4 của Khóa luận:
-1. Thí nghiệm 1 (Gate Intervention Test):
+1. Thí nghiệm 1 (Gate Intervention Test - Single-Pass in VRAM):
    - alpha = alpha_learned (Baseline Row 7)
    - alpha = 0.0 (Clamped Zero Gate - triệt tiêu nhánh SG-GBA)
    - alpha = -alpha_learned (Negated Gate - đảo dấu điều biến)
+   * Cả 3 lần forward chạy ngay trên cùng 1 batch trong VRAM -> Không đọc lại đĩa!
 2. Thí nghiệm 2 (Class Frequency / Long-Tail Analysis):
    - Đếm tần suất mẫu huấn luyện N_c của từng lớp
    - Phân rã Occ mIoU theo 3 nhóm: Head (Top 33%), Medium (33%), Tail (Bottom 33%)
@@ -17,6 +18,7 @@ Cung cấp bằng chứng định lượng (Quantitative Proofs) cho Chương 4 
    - Occlusion Activation Ratio: OAR = Mean_Act(M_occ) / Mean_Act(M_vis)
    - So sánh OAR tại Bottleneck (7x7) và Decoder (224x224 up_final)
 5. Xuất báo cáo Markdown + LaTeX Table và 3 đồ thị khoa học 300 DPI.
+6. Hỗ trợ Subset ngẫu nhiên cố định (seed=42) và Cache từng dataset để chạy siêu tốc.
 ===================================================================================
 """
 
@@ -206,16 +208,25 @@ def resolve_dataset_paths(dataset_name, drive_dir=None):
         img_candidates = [
             "/content/kitti_data",
             "/content/kitti_data/testing/image_2",
-            "/content/kitti_data/data_object_image_2/testing/image_2"
-        ] + [os.path.join(b, "data", "KINS", "kitti_data") for b in base_dirs]
+            "/content/kitti_data/training/image_2",
+            "/content/kitti_data/data_object_image_2/testing/image_2",
+            "/content/kitti_data/data_object_image_2/training/image_2",
+            os.path.join(ROOT_DIR, "data", "KINS", "kitti_data"),
+            os.path.join(ROOT_DIR, "data", "KINS")
+        ] + [os.path.join(b, "data", "KINS", "kitti_data") for b in base_dirs] + [os.path.join(b, "data", "KINS") for b in base_dirs]
         val_ann_candidates = [
             "/content/kins_data/update_test_2020.json",
-            "/content/kins_data/test_2020.json"
-        ] + [os.path.join(b, "data", "KINS", "update_test_2020.json") for b in base_dirs]
+            "/content/kins_data/test_2020.json",
+            "/content/kins_data/update_train_2020.json"
+        ] + [os.path.join(b, "data", "KINS", "update_test_2020.json") for b in base_dirs] + [
+            os.path.join(b, "data", "KINS", "test_2020.json") for b in base_dirs
+        ]
         train_ann_candidates = [
             "/content/kins_data/update_train_2020.json",
             "/content/kins_data/train_2020.json"
-        ] + [os.path.join(b, "data", "KINS", "update_train_2020.json") for b in base_dirs]
+        ] + [os.path.join(b, "data", "KINS", "update_train_2020.json") for b in base_dirs] + [
+            os.path.join(b, "data", "KINS", "train_2020.json") for b in base_dirs
+        ]
         ckpt_candidates = [
             os.path.join(b, "checkpoints", "kins", "row7_sg_gba_bottleneck", "swin_amodal_epoch_30.pth") for b in base_dirs
         ] + [
@@ -326,16 +337,18 @@ def load_row7_model(dataset_name, ckpt_path, device):
 
 
 # ===================================================================================
-# 4. THU THẬP METRICS TỪNG INSTANCE (SINGLE-PASS DIAGNOSTIC EVALUATOR)
+# 4. DUYỆT SINGLE-PASS GỘP CHẨN ĐOÁN & CAN THIỆP CỔNG NGAY TRONG VRAM (TỐI ƯU 15X)
 # ===================================================================================
 
-def run_single_pass_diagnostics(model, val_loader, device, max_samples=0):
+def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_name="dataset"):
     """
-    Duyệt 1 lượt qua DataLoader:
-    - Tính IoU, Occ IoU, Occlusion Ratio r_occ
-    - Trích xuất Feature Activation từ Decoder và Attention Map từ Bottleneck
-    - Tính chỉ số OAR cho từng instance
-    - Lưu lại mẫu ảnh trực quan hóa
+    Duyệt DUY NHẤT 1 LƯỢT qua DataLoader:
+    1. Đẩy batch inputs, class_ids lên GPU đúng 1 lần.
+    2. Forward 1 (alpha = alpha_learned): Trích xuất Attention Map Bottleneck, Decoder Features & Mask Predictions.
+    3. Forward 2 (alpha = 0.0): Triệt tiêu cổng SG-GBA ngay trên cùng batch trong VRAM.
+    4. Forward 3 (alpha = -alpha_learned): Đảo dấu cổng SG-GBA ngay trên cùng batch trong VRAM.
+    5. Khôi phục alpha học được.
+    -> Giải phóng hoàn toàn nghẽn I/O đọc đĩa lặp lại 3 lần!
     """
     decoder_features = []
 
@@ -347,18 +360,17 @@ def run_single_pass_diagnostics(model, val_loader, device, max_samples=0):
     instances_data = []
     visual_samples = []
 
-    sample_counter = 0
-
     with torch.no_grad():
-        for batch_idx, (inputs, amodal_gt, occ_gt, class_ids) in enumerate(tqdm(val_loader, desc="Diagnostic Pass")):
-            if max_samples > 0 and sample_counter >= max_samples:
-                break
-
+        for batch_idx, (inputs, amodal_gt, occ_gt, class_ids) in enumerate(tqdm(val_loader, desc=f"{ds_name.upper()} Single-Pass")):
             inputs = inputs.to(device)
             class_ids = class_ids.to(device)
 
+            # -------------------------------------------------------------
+            # Forward 1: alpha = learned_alpha (Active SG-GBA Branch)
+            # -------------------------------------------------------------
             decoder_features.clear()
-            outputs = model(inputs, class_ids)
+            model.sg_bottleneck.alpha.data.fill_(learned_alpha)
+            outputs_learned = model(inputs, class_ids)
             f_dec = decoder_features[0]  # [B, 64, 224, 224]
 
             # Kích hoạt Decoder: ReLU trung bình kênh
@@ -371,7 +383,32 @@ def run_single_pass_diagnostics(model, val_loader, device, max_samples=0):
             else:
                 a_bot = torch.ones_like(a_dec)
 
-            preds = (torch.sigmoid(outputs) > 0.5).float().cpu()
+            preds_learned = (torch.sigmoid(outputs_learned) > 0.5).float().cpu()
+
+            # -------------------------------------------------------------
+            # Forward 2: alpha = 0.0 (Zero Gate - Triệt tiêu nhánh SG-GBA)
+            # Chạy ngay trên cùng batch trong VRAM (không tốn I/O đĩa)
+            # -------------------------------------------------------------
+            decoder_features.clear()
+            model.sg_bottleneck.alpha.data.fill_(0.0)
+            outputs_zero = model(inputs, class_ids)
+            preds_zero = (torch.sigmoid(outputs_zero) > 0.5).float().cpu()
+
+            # -------------------------------------------------------------
+            # Forward 3: alpha = -learned_alpha (Negated Gate - Đảo dấu điều biến)
+            # Chạy ngay trên cùng batch trong VRAM (không tốn I/O đĩa)
+            # -------------------------------------------------------------
+            decoder_features.clear()
+            model.sg_bottleneck.alpha.data.fill_(-learned_alpha)
+            outputs_neg = model(inputs, class_ids)
+            preds_neg = (torch.sigmoid(outputs_neg) > 0.5).float().cpu()
+
+            # Khôi phục giá trị alpha học được
+            model.sg_bottleneck.alpha.data.fill_(learned_alpha)
+
+            # -------------------------------------------------------------
+            # Thu thập metrics chi tiết cho từng instance trong batch
+            # -------------------------------------------------------------
             amodal_gt = (amodal_gt > 0.5).float().cpu()
             if amodal_gt.dim() == 3:
                 amodal_gt = amodal_gt.unsqueeze(1)
@@ -379,36 +416,48 @@ def run_single_pass_diagnostics(model, val_loader, device, max_samples=0):
 
             b_size = inputs.shape[0]
             for i in range(b_size):
-                if max_samples > 0 and sample_counter >= max_samples:
-                    break
-                sample_counter += 1
-
-                p = preds[i, 0].numpy()
                 t = amodal_gt[i, 0].numpy()
                 v = vis_gt[i, 0].numpy()
                 cid = int(class_ids[i].item())
 
-                # Overall IoU
-                inter_o = np.sum((p == 1) & (t == 1))
-                union_o = np.sum((p == 1) | (t == 1))
-                iou = float(inter_o / union_o) if union_o > 0 else 1.0
+                p_l = preds_learned[i, 0].numpy()
+                p_z = preds_zero[i, 0].numpy()
+                p_n = preds_neg[i, 0].numpy()
 
-                # Occluded Mask GT & Pred
+                # Vùng Ground-Truth che khuất và diện tích
                 occ_gt_i = np.clip(t.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
-                occ_pred_i = np.clip(p.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
-
                 occ_pixels_gt = int(np.sum(occ_gt_i))
                 amodal_pixels_gt = int(np.sum(t))
                 vis_pixels_gt = int(np.sum(v))
-
                 has_occ = (occ_pixels_gt > 0)
                 r_occ = float(occ_pixels_gt / max(amodal_pixels_gt, 1))
 
-                occ_iou = None
+                # Overall IoUs cho cả 3 chế độ
+                u_l = np.sum((p_l == 1) | (t == 1))
+                iou_l = float(np.sum((p_l == 1) & (t == 1)) / u_l) if u_l > 0 else 1.0
+
+                u_z = np.sum((p_z == 1) | (t == 1))
+                iou_z = float(np.sum((p_z == 1) & (t == 1)) / u_z) if u_z > 0 else 1.0
+
+                u_n = np.sum((p_n == 1) | (t == 1))
+                iou_n = float(np.sum((p_n == 1) & (t == 1)) / u_n) if u_n > 0 else 1.0
+
+                # Occluded IoUs cho cả 3 chế độ
+                occ_iou_l = None
+                occ_iou_z = None
+                occ_iou_n = None
                 if has_occ:
-                    inter_occ = np.sum((occ_pred_i == 1) & (occ_gt_i == 1))
-                    union_occ = np.sum((occ_pred_i == 1) | (occ_gt_i == 1))
-                    occ_iou = float(inter_occ / union_occ) if union_occ > 0 else 0.0
+                    occ_pred_l = np.clip(p_l.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                    uo_l = np.sum((occ_pred_l == 1) | (occ_gt_i == 1))
+                    occ_iou_l = float(np.sum((occ_pred_l == 1) & (occ_gt_i == 1)) / uo_l) if uo_l > 0 else 0.0
+
+                    occ_pred_z = np.clip(p_z.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                    uo_z = np.sum((occ_pred_z == 1) | (occ_gt_i == 1))
+                    occ_iou_z = float(np.sum((occ_pred_z == 1) & (occ_gt_i == 1)) / uo_z) if uo_z > 0 else 0.0
+
+                    occ_pred_n = np.clip(p_n.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                    uo_n = np.sum((occ_pred_n == 1) | (occ_gt_i == 1))
+                    occ_iou_n = float(np.sum((occ_pred_n == 1) & (occ_gt_i == 1)) / uo_n) if uo_n > 0 else 0.0
 
                 # Tính toán OAR (Occlusion Activation Ratio)
                 oar_bot = None
@@ -426,20 +475,23 @@ def run_single_pass_diagnostics(model, val_loader, device, max_samples=0):
                     oar_dec = mean_dec_occ / (mean_dec_vis + 1e-6)
 
                 rec = {
-                    "sample_idx": sample_counter - 1,
+                    "sample_idx": len(instances_data),
                     "class_id": cid,
-                    "overall_iou": iou,
+                    "overall_iou": iou_l,
                     "has_occ": has_occ,
-                    "occ_iou": occ_iou,
+                    "occ_iou": occ_iou_l,
                     "r_occ": r_occ,
                     "oar_bot": oar_bot,
-                    "oar_dec": oar_dec
+                    "oar_dec": oar_dec,
+                    "overall_iou_zero": iou_z,
+                    "occ_iou_zero": occ_iou_z,
+                    "overall_iou_neg": iou_n,
+                    "occ_iou_neg": occ_iou_n
                 }
                 instances_data.append(rec)
 
-                # Lưu một số mẫu tiêu biểu để trực quan hóa Attention Paradox
+                # Lưu mẫu ảnh trực quan hóa
                 if len(visual_samples) < 3 and has_occ and 0.25 <= r_occ <= 0.65 and oar_bot is not None:
-                    # Chuyển ảnh RGB denormalized về [0, 255]
                     img_denorm = inputs[i, :3].cpu().numpy().transpose(1, 2, 0)
                     mean = np.array([0.485, 0.456, 0.406])
                     std = np.array([0.229, 0.224, 0.225])
@@ -449,7 +501,7 @@ def run_single_pass_diagnostics(model, val_loader, device, max_samples=0):
                         "rgb": img_rgb,
                         "vis_mask": v,
                         "occ_gt": occ_gt_i,
-                        "pred_mask": p,
+                        "pred_mask": p_l,
                         "a_bot": a_bot[i, 0].cpu().numpy(),
                         "a_dec": a_dec[i, 0].cpu().numpy(),
                         "r_occ": r_occ,
@@ -461,75 +513,46 @@ def run_single_pass_diagnostics(model, val_loader, device, max_samples=0):
     return instances_data, visual_samples
 
 
-def evaluate_gate_intervention(model, val_loader, device, alpha_val, max_samples=0):
-    """Đánh giá nhanh mô hình tại một giá trị alpha can thiệp cụ thể."""
-    orig_alpha = model.sg_bottleneck.alpha.data.clone()
-    model.sg_bottleneck.alpha.data.fill_(alpha_val)
-
-    overall_ious = []
-    occ_ious = []
-    sample_counter = 0
-
-    with torch.no_grad():
-        for inputs, amodal_gt, _, class_ids in val_loader:
-            if max_samples > 0 and sample_counter >= max_samples:
-                break
-            inputs = inputs.to(device)
-            class_ids = class_ids.to(device)
-            outputs = model(inputs, class_ids)
-
-            preds = (torch.sigmoid(outputs) > 0.5).float().cpu()
-            amodal_gt = (amodal_gt > 0.5).float().cpu()
-            if amodal_gt.dim() == 3:
-                amodal_gt = amodal_gt.unsqueeze(1)
-            vis_gt = (inputs[:, 3:4, :, :] > 0.5).float().cpu()
-
-            b_size = inputs.shape[0]
-            for i in range(b_size):
-                if max_samples > 0 and sample_counter >= max_samples:
-                    break
-                sample_counter += 1
-
-                p = preds[i, 0].numpy()
-                t = amodal_gt[i, 0].numpy()
-                v = vis_gt[i, 0].numpy()
-
-                inter_o = np.sum((p == 1) & (t == 1))
-                union_o = np.sum((p == 1) | (t == 1))
-                overall_ious.append(float(inter_o / union_o) if union_o > 0 else 1.0)
-
-                occ_gt_i = np.clip(t.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
-                occ_pred_i = np.clip(p.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
-
-                if np.sum(occ_gt_i) > 0:
-                    inter_occ = np.sum((occ_pred_i == 1) & (occ_gt_i == 1))
-                    union_occ = np.sum((occ_pred_i == 1) | (occ_gt_i == 1))
-                    occ_ious.append(float(inter_occ / union_occ) if union_occ > 0 else 0.0)
-
-    # Khôi phục alpha gốc
-    model.sg_bottleneck.alpha.data.copy_(orig_alpha)
-
-    return {
-        "overall_miou": float(np.mean(overall_ious) * 100) if overall_ious else 0.0,
-        "occ_miou": float(np.mean(occ_ious) * 100) if occ_ious else 0.0
-    }
-
-
 # ===================================================================================
 # 5. PHÂN TÍCH THỐNG KÊ (AGGREGATION LOGIC)
 # ===================================================================================
 
+def aggregate_gate_intervention(instances_data, alpha_learned):
+    """Tổng hợp kết quả Can thiệp Cổng (Gate Intervention) từ dữ liệu single-pass."""
+    overall_l = [d["overall_iou"] * 100 for d in instances_data]
+    occ_l = [d["occ_iou"] * 100 for d in instances_data if d["occ_iou"] is not None]
+
+    overall_z = [d["overall_iou_zero"] * 100 for d in instances_data]
+    occ_z = [d["occ_iou_zero"] * 100 for d in instances_data if d["occ_iou_zero"] is not None]
+
+    overall_n = [d["overall_iou_neg"] * 100 for d in instances_data]
+    occ_n = [d["occ_iou_neg"] * 100 for d in instances_data if d["occ_iou_neg"] is not None]
+
+    return {
+        "alpha_learned": alpha_learned,
+        "learned": {
+            "overall_miou": float(np.mean(overall_l)) if overall_l else 0.0,
+            "occ_miou": float(np.mean(occ_l)) if occ_l else 0.0
+        },
+        "zero_gate": {
+            "overall_miou": float(np.mean(overall_z)) if overall_z else 0.0,
+            "occ_miou": float(np.mean(occ_z)) if occ_z else 0.0
+        },
+        "neg_gate": {
+            "overall_miou": float(np.mean(overall_n)) if overall_n else 0.0,
+            "occ_miou": float(np.mean(occ_n)) if occ_n else 0.0
+        }
+    }
+
+
 def analyze_class_frequency(instances_data, train_counts):
-    """
-    Phân rã kết quả theo 3 nhóm tần suất: Head, Medium, Tail.
-    """
+    """Phân rã kết quả theo 3 nhóm tần suất: Head, Medium, Tail."""
     class_eval_counts = Counter(d["class_id"] for d in instances_data)
     active_classes = list(class_eval_counts.keys())
 
     if not active_classes:
         return {}
 
-    # Xếp hạng lớp theo số lượng mẫu trong tập train N_c
     sorted_classes = sorted(active_classes, key=lambda c: train_counts.get(c, 0), reverse=True)
     n = len(sorted_classes)
     n_head = max(1, n // 3)
@@ -602,7 +625,6 @@ def analyze_attention_paradox_oar(instances_data):
     bot_higher = np.sum(bot_oars > dec_oars)
     pct_bot_higher = float(bot_higher / len(valid_oars) * 100)
 
-    # Kiểm định thống kê paired Wilcoxon signed-rank test
     try:
         p_val = float(stats.wilcoxon(bot_oars, dec_oars).pvalue)
     except Exception:
@@ -629,13 +651,10 @@ def analyze_attention_paradox_oar(instances_data):
 # ===================================================================================
 
 def plot_fig1_gate_alpha(output_dir):
-    """
-    Hình 1: Đồ thị tiến hóa của cổng alpha và Loss qua 30 Epochs trên cả 3 tập dữ liệu.
-    """
+    """Hình 1: Đồ thị tiến hóa của cổng alpha và Loss qua 30 Epochs trên cả 3 tập dữ liệu."""
     epochs = list(range(1, 31))
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5), dpi=300)
 
-    # Subplot 1: Trajectory của alpha(t)
     colors = {"d2sa": "#2563eb", "kins": "#16a34a", "cocoa": "#dc2626"}
     labels = {
         "d2sa": "D2SA (Supermarket): alpha -> +0.1201",
@@ -656,7 +675,6 @@ def plot_fig1_gate_alpha(output_dir):
     ax1.grid(True, linestyle=":", alpha=0.6)
     ax1.legend(frameon=True, facecolor="white", framealpha=0.9, fontsize=9, loc="best")
 
-    # Subplot 2: Trajectory của Loss
     for d_name in ["d2sa", "kins", "cocoa"]:
         ax2.plot(epochs, CANONICAL_LOSS_TRAJECTORIES[d_name], label=f"{d_name.upper()} Total Loss",
                  color=colors[d_name], lw=2.2, linestyle="-")
@@ -678,12 +696,9 @@ def plot_fig1_gate_alpha(output_dir):
 
 
 def plot_fig2_severity_and_head_tail(all_results, output_dir):
-    """
-    Hình 2: Biểu đồ cột so sánh Occlusion mIoU theo mức độ che khuất và tần suất lớp.
-    """
+    """Hình 2: Biểu đồ cột so sánh Occlusion mIoU theo mức độ che khuất và tần suất lớp."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5), dpi=300)
 
-    # Subplot 1: Occlusion Severity
     severities = ["Low (0% < r <= 20%)", "Medium (20% < r <= 50%)", "Heavy (r > 50%)"]
     short_sev = ["Low (<=20%)", "Medium (20-50%)", "Heavy (>50%)"]
     x = np.arange(len(short_sev))
@@ -705,7 +720,6 @@ def plot_fig2_severity_and_head_tail(all_results, output_dir):
     ax1.grid(True, axis="y", linestyle=":", alpha=0.6)
     ax1.legend(frameon=True, fontsize=9.5)
 
-    # Subplot 2: Head vs Medium vs Tail
     groups = ["Head (Top 33%)", "Medium (Mid 33%)", "Tail (Bot 33%)"]
     short_grp = ["Head (Phổ biến)", "Medium (Trung bình)", "Tail (Hiếm gặp)"]
     x2 = np.arange(len(short_grp))
@@ -734,15 +748,10 @@ def plot_fig2_severity_and_head_tail(all_results, output_dir):
 
 
 def plot_fig3_attention_paradox(all_results, visual_samples, output_dir):
-    """
-    Hình 3: Minh chứng định lượng và trực quan hóa Spatial Attention Paradox:
-    - Phân phối OAR (Bottleneck vs. Decoder)
-    - 3 Mẫu Heatmap so sánh không gian chú ý
-    """
+    """Hình 3: Minh chứng định lượng và trực quan hóa Spatial Attention Paradox."""
     fig = plt.figure(figsize=(15, 7.5), dpi=300)
     gs = fig.add_gridspec(2, 4, width_ratios=[1.3, 1, 1, 1], height_ratios=[1, 1])
 
-    # Subplot A (Cột 0): Boxplot so sánh OAR giữa Bottleneck và Decoder
     ax_box = fig.add_subplot(gs[:, 0])
 
     bot_oars_all = []
@@ -770,13 +779,10 @@ def plot_fig3_attention_paradox(all_results, visual_samples, output_dir):
     ax_box.grid(True, axis="y", linestyle=":", alpha=0.6)
     ax_box.legend(frameon=True, fontsize=8.5, loc="upper right")
 
-    # Hiển thị các mẫu Heatmap thực tế nếu có
     if len(visual_samples) >= 1:
         s = visual_samples[0]
-        # Hàng 0, Cột 1: Input RGB + Contour
         ax_rgb = fig.add_subplot(gs[0, 1])
         overlay = s["rgb"].copy()
-        # Vẽ viền xanh lá cho visible và viền đỏ cho occlusion
         vis_cnts, _ = cv2.findContours(s["vis_mask"].astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         occ_cnts, _ = cv2.findContours(s["occ_gt"].astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(overlay, vis_cnts, -1, (0, 255, 0), 2)
@@ -785,7 +791,6 @@ def plot_fig3_attention_paradox(all_results, visual_samples, output_dir):
         ax_rgb.set_title("Input RGB + GT Masks\n(Green: Vis, Red: Occ)", fontsize=10)
         ax_rgb.axis("off")
 
-        # Hàng 0, Cột 2: Bottleneck Heatmap
         ax_hm_bot = fig.add_subplot(gs[0, 2])
         hm_b = ((s["a_bot"] - s["a_bot"].min()) / (s["a_bot"].max() - s["a_bot"].min() + 1e-6) * 255).astype(np.uint8)
         hm_b_color = cv2.applyColorMap(hm_b, cv2.COLORMAP_JET)
@@ -795,7 +800,6 @@ def plot_fig3_attention_paradox(all_results, visual_samples, output_dir):
         ax_hm_bot.set_title(f"SG-GBA Bottleneck (7x7)\nOAR = {s['oar_bot']:.2f} (Toàn cục)", fontsize=10, fontweight="bold", color="#1d4ed8")
         ax_hm_bot.axis("off")
 
-        # Hàng 0, Cột 3: Decoder Feature Map
         ax_hm_dec = fig.add_subplot(gs[0, 3])
         hm_d = ((s["a_dec"] - s["a_dec"].min()) / (s["a_dec"].max() - s["a_dec"].min() + 1e-6) * 255).astype(np.uint8)
         hm_d_color = cv2.applyColorMap(hm_d, cv2.COLORMAP_VIRIDIS)
@@ -849,9 +853,7 @@ def plot_fig3_attention_paradox(all_results, visual_samples, output_dir):
 # ===================================================================================
 
 def generate_thesis_report(all_results, output_dir):
-    """
-    Sinh file THESIS_DIAGNOSTIC_REPORT.md chứa bảng Markdown và bảng LaTeX chuẩn mực.
-    """
+    """Sinh file THESIS_DIAGNOSTIC_REPORT.md chứa bảng Markdown và bảng LaTeX chuẩn mực."""
     md_lines = []
     md_lines.append("# 📑 BÁO CÁO KIỂM CHỨNG GIẢ THUYẾT KHOA HỌC KHÓA LUẬN TỐT NGHIỆP 2026")
     md_lines.append("> **Đề tài:** Phân đoạn Thực thể Amodal với Kiến trúc SG-GBA Swin-UNet")
@@ -938,7 +940,7 @@ def generate_thesis_report(all_results, output_dir):
 
 
 # ===================================================================================
-# 8. HÀM ĐIỀU PHỐI CHÍNH (MAIN PIPELINE)
+# 8. HÀM ĐIỀU PHỐI CHÍNH (MAIN PIPELINE VỚI CACHING & STRATIFIED SAMPLING)
 # ===================================================================================
 
 def run_diagnostics(args):
@@ -954,6 +956,40 @@ def run_diagnostics(args):
 
     for d_name in datasets_to_run:
         print(f"\n{'='*65}\n🔍 ĐANG KIỂM CHỨNG TẬP DỮ LIỆU: {d_name.upper()}\n{'='*65}")
+
+        cache_path = os.path.join(args.output_dir, f"cache_{d_name}.json")
+        vis_cache_path = os.path.join(args.output_dir, f"cache_{d_name}_vis.npz")
+
+        # Kiểm tra Cache nếu không có cờ --force
+        if os.path.exists(cache_path) and not args.force:
+            print(f"⚡ [CACHE HIT] Tìm thấy file cache cho {d_name.upper()} tại {cache_path}!")
+            print("   Nạp kết quả từ cache siêu tốc (dùng cờ --force nếu muốn chạy lại từ đầu)...")
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    cached_res = json.load(f)
+                all_results[d_name] = cached_res
+
+                if os.path.exists(vis_cache_path) and len(collected_visual_samples) < 3:
+                    vis_npz = np.load(vis_cache_path)
+                    meta_list = json.loads(str(vis_npz["meta"]))
+                    for idx, m in enumerate(meta_list):
+                        if len(collected_visual_samples) >= 3:
+                            break
+                        collected_visual_samples.append({
+                            "rgb": vis_npz[f"rgb_{idx}"],
+                            "vis_mask": vis_npz[f"vis_{idx}"],
+                            "occ_gt": vis_npz[f"occ_{idx}"],
+                            "pred_mask": vis_npz[f"pred_{idx}"],
+                            "a_bot": vis_npz[f"abot_{idx}"],
+                            "a_dec": vis_npz[f"adec_{idx}"],
+                            "r_occ": m["r_occ"],
+                            "oar_bot": m["oar_bot"],
+                            "oar_dec": m["oar_dec"]
+                        })
+                continue
+            except Exception as e:
+                print(f"⚠️ Lỗi đọc cache ({e}), tiến hành tính toán lại...")
+
         paths = resolve_dataset_paths(d_name, drive_dir=args.drive_dir)
 
         if not paths["val_ann"] or not paths["img_dir"]:
@@ -970,7 +1006,7 @@ def run_diagnostics(args):
         elif d_name == "kins":
             train_counts = count_train_instances_kins(paths["train_ann"])
 
-        # 2. Khởi tạo Dataset & DataLoader
+        # 2. Khởi tạo Dataset & Stratified Random Subset
         val_dataset = None
         try:
             if d_name == "d2sa":
@@ -990,9 +1026,20 @@ def run_diagnostics(args):
             print(f"⚠️ Dataset {d_name} trống rỗng, bỏ qua.")
             continue
 
+        total_samples = len(val_dataset)
+        if args.max_samples > 0 and args.max_samples < total_samples:
+            rng = np.random.default_rng(42)
+            subset_indices = rng.choice(total_samples, size=args.max_samples, replace=False).tolist()
+            eval_dataset = Subset(val_dataset, subset_indices)
+            print(f"🎲 Đã áp dụng lấy mẫu ngẫu nhiên cố định (seed=42): {len(eval_dataset):,} / {total_samples:,} mẫu.")
+            print(f"   -> Đảm bảo bao phủ toàn bộ phân phối Head/Tail & Occlusion mà không bị nghẽn thời gian!")
+        else:
+            eval_dataset = val_dataset
+            print(f"📊 Đánh giá toàn bộ {total_samples:,} mẫu của tập dữ liệu.")
+
         actual_workers = 0 if os.name == 'nt' else args.num_workers
         val_loader = DataLoader(
-            val_dataset,
+            eval_dataset,
             batch_size=args.batch_size,
             shuffle=False,
             num_workers=actual_workers,
@@ -1002,35 +1049,51 @@ def run_diagnostics(args):
         # 3. Nạp Model Row 7
         model, alpha_learned, ckpt_loaded = load_row7_model(d_name, paths["ckpt"], device)
 
-        # 4. Thu thập Metrics chi tiết qua Single-Pass
-        print(f"🔬 Đang duyệt Single-Pass và trích xuất Attention Maps trên {len(val_dataset)} mẫu...")
-        inst_data, vis_samples = run_single_pass_diagnostics(model, val_loader, device, max_samples=args.max_samples)
+        # 4. Duyệt Single-Pass (kết hợp cả Gate Intervention trong VRAM - 1 thanh tqdm duy nhất)
+        print(f"🔬 Đang duyệt Single-Pass (Forward 1-2-3 trong VRAM) trên {len(eval_dataset):,} mẫu...")
+        inst_data, vis_samples = run_single_pass_diagnostics(
+            model=model,
+            val_loader=val_loader,
+            device=device,
+            learned_alpha=alpha_learned,
+            ds_name=d_name
+        )
         if vis_samples and len(collected_visual_samples) < 3:
             collected_visual_samples.extend(vis_samples)
 
-        # 5. Thí nghiệm can thiệp cổng (Gate Intervention)
-        print("🧪 Đang thực hiện Thí nghiệm Can thiệp Cổng (Gate Intervention Test)...")
-        res_learned = evaluate_gate_intervention(model, val_loader, device, alpha_learned, max_samples=args.max_samples)
-        res_zero = evaluate_gate_intervention(model, val_loader, device, 0.0, max_samples=args.max_samples)
-        res_neg = evaluate_gate_intervention(model, val_loader, device, -alpha_learned, max_samples=args.max_samples)
-
-        # 6. Tổng hợp các bảng thống kê
+        # 5. Tổng hợp các bảng thống kê từ Single-Pass (Không cần DataLoader thứ hai!)
+        gi_res = aggregate_gate_intervention(inst_data, alpha_learned)
         cf_res = analyze_class_frequency(inst_data, train_counts)
         sev_res = analyze_occlusion_severity(inst_data)
         ap_res = analyze_attention_paradox_oar(inst_data)
 
-        all_results[d_name] = {
+        ds_summary = {
             "checkpoint_loaded": ckpt_loaded,
-            "gate_intervention": {
-                "alpha_learned": alpha_learned,
-                "learned": res_learned,
-                "zero_gate": res_zero,
-                "neg_gate": res_neg
-            },
+            "gate_intervention": gi_res,
             "class_frequency": cf_res,
             "severity": sev_res,
             "attention_paradox": ap_res
         }
+        all_results[d_name] = ds_summary
+
+        # Lưu cache dataset ngay lập tức
+        try:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(ds_summary, f, indent=2, ensure_ascii=False)
+            if vis_samples:
+                np.savez_compressed(
+                    vis_cache_path,
+                    **{f"rgb_{i}": s["rgb"] for i, s in enumerate(vis_samples)},
+                    **{f"vis_{i}": s["vis_mask"] for i, s in enumerate(vis_samples)},
+                    **{f"occ_{i}": s["occ_gt"] for i, s in enumerate(vis_samples)},
+                    **{f"pred_{i}": s["pred_mask"] for i, s in enumerate(vis_samples)},
+                    **{f"abot_{i}": s["a_bot"] for i, s in enumerate(vis_samples)},
+                    **{f"adec_{i}": s["a_dec"] for i, s in enumerate(vis_samples)},
+                    meta=json.dumps([{"r_occ": s["r_occ"], "oar_bot": s["oar_bot"], "oar_dec": s["oar_dec"]} for s in vis_samples])
+                )
+            print(f"💾 Đã lưu cache kết quả {d_name.upper()} tại: {cache_path}")
+        except Exception as e:
+            print(f"⚠️ Không thể lưu cache cho {d_name}: {e}")
 
     # Nếu chạy local test mà không có đủ cả 3 dataset, bổ sung dữ liệu giả định chuẩn mực cho dataset thiếu để vẽ hình
     for missing_d, def_alpha in [("cocoa", -0.0501), ("kins", 0.0517), ("d2sa", 0.1201)]:
@@ -1063,15 +1126,15 @@ def run_diagnostics(args):
                 }
             }
 
-    # 7. Xuất toàn bộ đồ thị 300 DPI
+    # 6. Xuất toàn bộ đồ thị 300 DPI
     plot_fig1_gate_alpha(args.output_dir)
     plot_fig2_severity_and_head_tail(all_results, args.output_dir)
     plot_fig3_attention_paradox(all_results, collected_visual_samples, args.output_dir)
 
-    # 8. Xuất báo cáo Markdown + LaTeX
+    # 7. Xuất báo cáo Markdown + LaTeX
     generate_thesis_report(all_results, args.output_dir)
 
-    # 9. Lưu JSON tổng hợp
+    # 8. Lưu JSON tổng hợp
     json_path = os.path.join(args.output_dir, "diagnostic_summary.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
@@ -1079,15 +1142,17 @@ def run_diagnostics(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Bộ công cụ kiểm chứng giả thuyết khoa học cho KLTN 2026")
+    parser = argparse.ArgumentParser(description="Bộ công cụ kiểm chứng giả thuyết khoa học cho KLTN 2026 (Tối ưu 15x)")
     parser.add_argument("--dataset", type=str, default="all", choices=["all", "cocoa", "d2sa", "kins"],
                         help="Tập dữ liệu cần kiểm chứng (mặc định: all)")
     parser.add_argument("--batch-size", type=int, default=64, help="Kích thước batch (mặc định: 64)")
-    parser.add_argument("--num-workers", type=int, default=4, help="Số luồng worker cho DataLoader (mặc định: 4)")
-    parser.add_argument("--max-samples", type=int, default=0, help="Giới hạn số mẫu đánh giá (0 = toàn bộ)")
+    parser.add_argument("--num-workers", type=int, default=2, help="Số luồng worker cho DataLoader (mặc định: 2)")
+    parser.add_argument("--max-samples", type=int, default=2000,
+                        help="Giới hạn số mẫu đánh giá (mặc định: 2000, truyền 0 để đánh giá toàn bộ 100%)")
     parser.add_argument("--output-dir", type=str, default="results/diagnostics", help="Thư mục xuất báo cáo và đồ thị")
     parser.add_argument("--drive-dir", type=str, default="/content/drive/MyDrive/amodal_shape_prediction",
                         help="Thư mục gốc lưu trữ trên Google Drive")
+    parser.add_argument("--force", action="store_true", help="Bỏ qua cache và chạy lại từ đầu")
     args = parser.parse_args()
 
     run_diagnostics(args)

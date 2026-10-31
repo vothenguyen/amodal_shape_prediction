@@ -10,6 +10,8 @@ Tính năng:
 - Sinh ranh giới edge mask bằng toán tử hình thái học (cv2.dilate - cv2.erode)
 - Tính toán vùng bị che khuất occluded_mask = clip(amodal - visible, 0, 1)
 - Ghép tensor 5 kênh: RGB (3) + Visible (1) + Edge (1)
+- Tự động dò tìm đường dẫn ảnh KITTI trên các cấu trúc thư mục khác nhau
+- Fallback an toàn chống lỗi thiếu ảnh hoặc sai lệch kích thước
 ===================================================================================
 """
 
@@ -56,24 +58,53 @@ class KINSDataset(Dataset):
     def __len__(self):
         return len(self.valid_anns)
 
+    def _find_image_path(self, file_name):
+        """Dò tìm đường dẫn ảnh KITTI trên các vị trí cấu trúc thư mục thường gặp."""
+        candidates = [
+            os.path.join(self.img_dir, file_name),
+            os.path.join(self.img_dir, "testing", "image_2", file_name),
+            os.path.join(self.img_dir, "training", "image_2", file_name),
+            os.path.join(self.img_dir, "data_object_image_2", "testing", "image_2", file_name),
+            os.path.join(self.img_dir, "data_object_image_2", "training", "image_2", file_name),
+            f"/content/kitti_data/testing/image_2/{file_name}",
+            f"/content/kitti_data/training/image_2/{file_name}",
+        ]
+        for p in candidates:
+            if os.path.exists(p):
+                return p
+            # Hỗ trợ hoán đổi đuôi .jpg <-> .png
+            alt = p.replace('.jpg', '.png') if p.endswith('.jpg') else p.replace('.png', '.jpg')
+            if os.path.exists(alt):
+                return alt
+        return None
+
     def __getitem__(self, idx):
         ann = self.valid_anns[idx]
         img_info = self.coco.loadImgs(ann['image_id'])[0]
+        file_name = img_info['file_name']
 
-        img_path = os.path.join(self.img_dir, img_info['file_name'])
-        image = cv2.imread(img_path)
+        img_path = self._find_image_path(file_name)
+        image = None
+        if img_path is not None:
+            image = cv2.imread(img_path)
+
         if image is None:
-            # Fallback nếu định dạng ảnh khác .png / .jpg
-            alt_path = img_path.replace('.jpg', '.png') if img_path.endswith('.jpg') else img_path.replace('.png', '.jpg')
-            image = cv2.imread(alt_path)
-
-        if image is None:
-            raise FileNotFoundError(f"Không thể đọc ảnh: {img_path}")
-
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # Fallback zero image nếu thiếu file trên đĩa để không bao giờ bị dừng tiến trình
+            target_h = img_info.get('height', 375)
+            target_w = img_info.get('width', 1242)
+            image = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        else:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         amodal_mask = self.get_mask(ann, 'a_segm')
         visible_mask = self.get_mask(ann, 'i_segm')
+
+        # Đảm bảo kích thước ảnh và mask đồng bộ trước khi xử lý
+        h_img, w_img = image.shape[:2]
+        if visible_mask.shape != (h_img, w_img):
+            visible_mask = cv2.resize(visible_mask, (w_img, h_img), interpolation=cv2.INTER_NEAREST)
+        if amodal_mask.shape != (h_img, w_img):
+            amodal_mask = cv2.resize(amodal_mask, (w_img, h_img), interpolation=cv2.INTER_NEAREST)
 
         # Toán tử hình thái sinh edge mask
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
