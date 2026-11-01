@@ -107,7 +107,7 @@ def evaluate(args):
     # ─────────────────────────────────────────────────────────────
     # NẠP MÔ HÌNH VÀ BÓC TÁCH CHECKPOINT (FIX LỖI _orig_mod)
     # ─────────────────────────────────────────────────────────────
-    model = AmodalSwinUNet(num_classes=91).to(device)
+    model = AmodalSwinUNet(num_classes=args.num_classes).to(device)
     
     # Nạp file tạ
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=True)
@@ -218,6 +218,7 @@ def parse_args():
     
     # Loại bỏ --batch-size vì đã fix cứng là 1 trong code
     parser.add_argument("--num-workers", type=int, default=4, help="Số worker DataLoader")
+    parser.add_argument("--num-classes", type=int, default=91, help="Số classes cho Category Embedding (default: 91 cho COCO, 60 cho D2SA)")
     parser.add_argument("--resize", type=int, default=224, help="Kích thước resize input")
     parser.add_argument("--threshold", type=float, default=0.5, help="Ngưỡng sigmoid")
     parser.add_argument("--device", type=str, default="auto", help="Thiết bị: auto, cpu, cuda")
