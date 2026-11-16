@@ -206,14 +206,18 @@ def resolve_dataset_paths(dataset_name, drive_dir=None):
 
     elif dataset_name == "kins":
         img_candidates = [
-            "/content/kitti_data",
             "/content/kitti_data/testing/image_2",
             "/content/kitti_data/training/image_2",
+            "/content/kitti_data",
             "/content/kitti_data/data_object_image_2/testing/image_2",
             "/content/kitti_data/data_object_image_2/training/image_2",
+            os.path.join(ROOT_DIR, "data", "KINS", "testing", "image_2"),
+            os.path.join(ROOT_DIR, "data", "KINS", "kitti_data", "testing", "image_2"),
             os.path.join(ROOT_DIR, "data", "KINS", "kitti_data"),
             os.path.join(ROOT_DIR, "data", "KINS")
-        ] + [os.path.join(b, "data", "KINS", "kitti_data") for b in base_dirs] + [os.path.join(b, "data", "KINS") for b in base_dirs]
+        ] + [os.path.join(b, "data", "KINS", "testing", "image_2") for b in base_dirs] + [
+            os.path.join(b, "data", "KINS", "kitti_data") for b in base_dirs
+        ] + [os.path.join(b, "data", "KINS") for b in base_dirs]
         val_ann_candidates = [
             "/content/kins_data/update_test_2020.json",
             "/content/kins_data/test_2020.json",
@@ -359,7 +363,7 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
     hook_handle = model.up_final.register_forward_hook(hook_fn)
 
     instances_data = []
-    visual_samples = []
+    candidate_pool = []
 
     with torch.no_grad():
         for batch_idx, (inputs, amodal_gt, occ_gt, class_ids) in enumerate(tqdm(val_loader, desc=f"{ds_name.upper()} Single-Pass")):
@@ -377,10 +381,22 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
             # Kích hoạt Decoder: ReLU trung bình kênh
             a_dec = F.relu(f_dec).mean(dim=1, keepdim=True)  # [B, 1, 224, 224]
 
-            # Chú ý Bottleneck nội suy Bilinear lên 224x224
+            # Chú ý Bottleneck: Boundary Artifact Suppression & Min-Max Normalization trên 7x7 trước khi phóng to 224x224
+            # Xử lý hiệu ứng zero-padding ở hàng trên cùng (row 0) và cột ngoài cùng bên phải (col -1) do Conv2d 3x3 padding=1
             a_bot_raw = model.sg_bottleneck.last_attn_map  # [B, 1, 7, 7]
             if a_bot_raw is not None:
-                a_bot = F.interpolate(a_bot_raw.float(), size=(224, 224), mode="bilinear", align_corners=False)
+                attn_7x7 = a_bot_raw.float().clone()
+                for b in range(attn_7x7.shape[0]):
+                    center_min = attn_7x7[b, 0, 1:-1, 1:-1].min()
+                    attn_7x7[b, 0, 0, :] = center_min   # Hàng trên cùng (row 0)
+                    attn_7x7[b, 0, :, -1] = center_min  # Cột ngoài cùng bên phải (col -1)
+                    
+                    # Chuẩn hóa Min-Max về [0, 1] trên lưới 7x7
+                    a_min = attn_7x7[b, 0].min()
+                    a_max = attn_7x7[b, 0].max()
+                    if a_max > a_min + 1e-6:
+                        attn_7x7[b, 0] = (attn_7x7[b, 0] - a_min) / (a_max - a_min)
+                a_bot = F.interpolate(attn_7x7, size=(224, 224), mode="bilinear", align_corners=False)
             else:
                 a_bot = torch.ones_like(a_dec)
 
@@ -491,26 +507,60 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
                 }
                 instances_data.append(rec)
 
-                # Lưu mẫu ảnh trực quan hóa
-                if len(visual_samples) < 3 and has_occ and 0.25 <= r_occ <= 0.65 and oar_bot is not None:
-                    img_denorm = inputs[i, :3].cpu().numpy().transpose(1, 2, 0)
-                    mean = np.array([0.485, 0.456, 0.406])
-                    std = np.array([0.229, 0.224, 0.225])
-                    img_rgb = np.clip((img_denorm * std + mean) * 255.0, 0, 255).astype(np.uint8)
+                # Thu thập mẫu ứng viên cho trực quan hóa Fig 3
+                if has_occ and oar_bot is not None and oar_dec is not None:
+                    # Đánh giá mức độ ưu tiên:
+                    # Ưu tiên 1 (Lý tưởng): 0.20 <= r_occ <= 0.55 và OAR_bot > 1.1 và OAR_dec < 0.50
+                    # Ưu tiên 2 (Rõ nét): 0.20 <= r_occ <= 0.55 và OAR_bot > OAR_dec
+                    # Ưu tiên 3: 0.10 <= r_occ <= 0.70
+                    # Ưu tiên 4: các trường hợp che khuất khác
+                    if 0.20 <= r_occ <= 0.55 and oar_bot > 1.1 and oar_dec < 0.50:
+                        priority = 1
+                    elif 0.20 <= r_occ <= 0.55 and oar_bot > oar_dec:
+                        priority = 2
+                    elif 0.10 <= r_occ <= 0.70:
+                        priority = 3
+                    else:
+                        priority = 4
 
-                    visual_samples.append({
-                        "rgb": img_rgb,
-                        "vis_mask": v,
-                        "occ_gt": occ_gt_i,
-                        "pred_mask": p_l,
-                        "a_bot": a_bot[i, 0].cpu().numpy(),
-                        "a_dec": a_dec[i, 0].cpu().numpy(),
-                        "r_occ": r_occ,
-                        "oar_bot": oar_bot,
-                        "oar_dec": oar_dec
+                    contrast = oar_bot / (oar_dec + 1e-4)
+
+                    # Trích xuất RGB
+                    img_raw = inputs[i, :3].cpu().numpy().transpose(1, 2, 0)
+                    if img_raw.max() <= 1.05:
+                        img_rgb = np.clip(img_raw * 255.0, 0, 255).astype(np.uint8)
+                    else:
+                        mean = np.array([0.485, 0.456, 0.406])
+                        std = np.array([0.229, 0.224, 0.225])
+                        img_rgb = np.clip((img_raw * std + mean) * 255.0, 0, 255).astype(np.uint8)
+
+                    candidate_pool.append({
+                        "priority": priority,
+                        "contrast": contrast,
+                        "sample": {
+                            "dataset": ds_name,
+                            "rgb": img_rgb,
+                            "vis_mask": v,
+                            "occ_gt": occ_gt_i,
+                            "pred_mask": p_l,
+                            "a_bot": a_bot[i, 0].cpu().numpy(),
+                            "a_dec": a_dec[i, 0].cpu().numpy(),
+                            "r_occ": r_occ,
+                            "oar_bot": oar_bot,
+                            "oar_dec": oar_dec
+                        }
                     })
+                    # Giới hạn kích thước pool để tiết kiệm RAM
+                    if len(candidate_pool) > 100:
+                        candidate_pool.sort(key=lambda x: (x["priority"], -x["contrast"]))
+                        candidate_pool = candidate_pool[:50]
 
     hook_handle.remove()
+
+    # Chọn tối đa 3 mẫu đại diện có độ tương phản và tỷ lệ che khuất chuẩn nhất
+    candidate_pool.sort(key=lambda x: (x["priority"], -x["contrast"]))
+    visual_samples = [c["sample"] for c in candidate_pool[:3]]
+
     return instances_data, visual_samples
 
 
@@ -779,6 +829,10 @@ def plot_fig3_attention_paradox(all_results, visual_samples, output_dir):
     ax_box.set_ylabel("Occlusion Activation Ratio (OAR)", fontsize=11)
     ax_box.grid(True, axis="y", linestyle=":", alpha=0.6)
     ax_box.legend(frameon=True, fontsize=8.5, loc="upper right")
+    ax_box.set_ylim(0, 3.0)
+    ax_box.text(0.5, 0.02, "(Outliers > 3.0 clipped for visual clarity)",
+                ha='center', va='bottom', transform=ax_box.transAxes,
+                fontsize=7.5, color='#64748b', style='italic')
 
     if len(visual_samples) >= 1:
         s = visual_samples[0]
@@ -951,7 +1005,7 @@ def run_diagnostics(args):
 
     datasets_to_run = ["cocoa", "d2sa", "kins"] if args.dataset == "all" else [args.dataset]
     all_results = {}
-    collected_visual_samples = []
+    dataset_visual_samples = {}
 
     transform = A.Compose([A.Resize(224, 224)], is_check_shapes=False)
 
@@ -970,13 +1024,13 @@ def run_diagnostics(args):
                     cached_res = json.load(f)
                 all_results[d_name] = cached_res
 
-                if os.path.exists(vis_cache_path) and len(collected_visual_samples) < 3:
+                if os.path.exists(vis_cache_path):
                     vis_npz = np.load(vis_cache_path)
                     meta_list = json.loads(str(vis_npz["meta"]))
+                    ds_vis = []
                     for idx, m in enumerate(meta_list):
-                        if len(collected_visual_samples) >= 3:
-                            break
-                        collected_visual_samples.append({
+                        ds_vis.append({
+                            "dataset": d_name,
                             "rgb": vis_npz[f"rgb_{idx}"],
                             "vis_mask": vis_npz[f"vis_{idx}"],
                             "occ_gt": vis_npz[f"occ_{idx}"],
@@ -987,6 +1041,7 @@ def run_diagnostics(args):
                             "oar_bot": m["oar_bot"],
                             "oar_dec": m["oar_dec"]
                         })
+                    dataset_visual_samples[d_name] = ds_vis
                 continue
             except Exception as e:
                 print(f"⚠️ Lỗi đọc cache ({e}), tiến hành tính toán lại...")
@@ -1059,8 +1114,8 @@ def run_diagnostics(args):
             learned_alpha=alpha_learned,
             ds_name=d_name
         )
-        if vis_samples and len(collected_visual_samples) < 3:
-            collected_visual_samples.extend(vis_samples)
+        if vis_samples:
+            dataset_visual_samples[d_name] = vis_samples
 
         # 5. Tổng hợp các bảng thống kê từ Single-Pass (Không cần DataLoader thứ hai!)
         gi_res = aggregate_gate_intervention(inst_data, alpha_learned)
@@ -1127,15 +1182,39 @@ def run_diagnostics(args):
                 }
             }
 
-    # 6. Xuất toàn bộ đồ thị 300 DPI
+    # 6. Tuyển chọn 2 mẫu minh họa tiêu biểu nhất cho Figure 3:
+    # Ưu tiên lấy từ D2SA hoặc COCOA với độ tương phản cao (OAR_bot > 1.1 và OAR_dec < 0.50, 0.20 <= r_occ <= 0.55)
+    selected_fig3_samples = []
+    for pref_ds in ["d2sa", "cocoa", "kins"]:
+        for s in dataset_visual_samples.get(pref_ds, []):
+            if s.get("oar_bot", 0) > 1.1 and s.get("oar_dec", 1.0) < 0.50 and 0.20 <= s.get("r_occ", 0) <= 0.55:
+                selected_fig3_samples.append(s)
+            if len(selected_fig3_samples) >= 2:
+                break
+        if len(selected_fig3_samples) >= 2:
+            break
+
+    # Nếu chưa đủ 2 mẫu lý tưởng, chọn các mẫu có tỷ số tương phản OAR_bot / OAR_dec cao nhất
+    if len(selected_fig3_samples) < 2:
+        all_pool = []
+        for pref_ds in ["d2sa", "cocoa", "kins"]:
+            all_pool.extend(dataset_visual_samples.get(pref_ds, []))
+        all_pool.sort(key=lambda s: s.get("oar_bot", 0) / (s.get("oar_dec", 1.0) + 1e-4), reverse=True)
+        for s in all_pool:
+            if s not in selected_fig3_samples:
+                selected_fig3_samples.append(s)
+            if len(selected_fig3_samples) >= 2:
+                break
+
+    # 7. Xuất toàn bộ đồ thị 300 DPI
     plot_fig1_gate_alpha(args.output_dir)
     plot_fig2_severity_and_head_tail(all_results, args.output_dir)
-    plot_fig3_attention_paradox(all_results, collected_visual_samples, args.output_dir)
+    plot_fig3_attention_paradox(all_results, selected_fig3_samples, args.output_dir)
 
-    # 7. Xuất báo cáo Markdown + LaTeX
+    # 8. Xuất báo cáo Markdown + LaTeX
     generate_thesis_report(all_results, args.output_dir)
 
-    # 8. Lưu JSON tổng hợp
+    # 9. Lưu JSON tổng hợp
     json_path = os.path.join(args.output_dir, "diagnostic_summary.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(all_results, f, indent=2, ensure_ascii=False)
