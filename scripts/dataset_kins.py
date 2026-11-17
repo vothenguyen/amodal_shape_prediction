@@ -106,9 +106,11 @@ class KINSDataset(Dataset):
         if amodal_mask.shape != (h_img, w_img):
             amodal_mask = cv2.resize(amodal_mask, (w_img, h_img), interpolation=cv2.INTER_NEAREST)
 
-        # Toán tử hình thái sinh edge mask
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        edge_mask = cv2.dilate(visible_mask, kernel, iterations=1) - cv2.erode(visible_mask, kernel, iterations=1)
+        # Toán tử hình thái sinh edge mask (Kernel 5x5 đồng bộ 100% với train_kins.ipynb Cell 19)
+        kernel = np.ones((5, 5), np.uint8)
+        dilated = cv2.dilate(visible_mask, kernel, iterations=1)
+        eroded = cv2.erode(visible_mask, kernel, iterations=1)
+        edge_mask = (dilated - eroded)
 
         # Tính occluded mask
         occluded_mask = np.clip(amodal_mask.astype(np.int32) - visible_mask.astype(np.int32), 0, 1).astype(np.uint8)
@@ -116,16 +118,18 @@ class KINSDataset(Dataset):
         if self.transform is not None:
             augmented = self.transform(
                 image=image,
-                masks=[visible_mask, edge_mask, amodal_mask, occluded_mask]
+                masks=[amodal_mask, visible_mask, edge_mask, occluded_mask]
             )
             image = augmented['image']
-            visible_mask = augmented['masks'][0]
-            edge_mask = augmented['masks'][1]
-            amodal_mask = augmented['masks'][2]
-            occluded_mask = augmented['masks'][3]
+            amodal_mask, visible_mask, edge_mask, occluded_mask = augmented['masks']
 
+        # Chuẩn hóa ImageNet: chia 255.0 rồi trừ mean chia std (đồng bộ 100% với train_kins.ipynb Cell 19)
         if not isinstance(image, torch.Tensor):
-            image = torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
+            image = image.astype(np.float32) / 255.0
+            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+            std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+            image = (image - mean) / std
+            image = torch.from_numpy(image.transpose(2, 0, 1)).float()
 
         input_5ch = torch.cat([
             image,

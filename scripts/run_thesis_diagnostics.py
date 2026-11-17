@@ -232,11 +232,19 @@ def resolve_dataset_paths(dataset_name, drive_dir=None):
             os.path.join(b, "data", "KINS", "train_2020.json") for b in base_dirs
         ]
         ckpt_candidates = [
-            os.path.join(b, "checkpoints", "kins", "row7_sg_gba_bottleneck", "swin_amodal_epoch_30.pth") for b in base_dirs
-        ] + [
             os.path.join(b, "checkpoints", "kins", "row7_sg_gba", "swin_amodal_kins_row7_epoch_30.pth") for b in base_dirs
         ] + [
+            os.path.join(b, "checkpoints", "kins", "row7_sg_gba_bottleneck", "swin_amodal_epoch_30.pth") for b in base_dirs
+        ] + [
+            os.path.join(b, "amodal_checkpoints_kins_row7", "swin_amodal_kins_row7_epoch_30.pth") for b in base_dirs
+        ] + [
+            "/content/drive/MyDrive/amodal_checkpoints_kins_row7/swin_amodal_kins_row7_epoch_30.pth",
+            "/content/drive/MyDrive/amodal_shape_prediction/checkpoints/kins/row7_sg_gba/swin_amodal_kins_row7_epoch_30.pth",
+            "/content/drive/MyDrive/KLTN_Amodal_2026/checkpoints/kins/row7_sg_gba/swin_amodal_kins_row7_epoch_30.pth",
+        ] + [
             os.path.join(b, "checkpoints", "kins", "row7_sg_gba_bottleneck", "last.pth") for b in base_dirs
+        ] + [
+            os.path.join(b, "checkpoints", "kins", "row7_sg_gba", "last.pth") for b in base_dirs
         ] + [
             os.path.join(b, "checkpoints", "kins", "row7_sg_gba_bottleneck", "swin_amodal_epoch_1.pth") for b in base_dirs
         ]
@@ -430,6 +438,9 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
             if amodal_gt.dim() == 3:
                 amodal_gt = amodal_gt.unsqueeze(1)
             vis_gt = (inputs[:, 3:4, :, :] > 0.5).float().cpu()
+            occ_gt = (occ_gt > 0.5).float().cpu()
+            if occ_gt.dim() == 3:
+                occ_gt = occ_gt.unsqueeze(1)
 
             b_size = inputs.shape[0]
             for i in range(b_size):
@@ -442,7 +453,12 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
                 p_n = preds_neg[i, 0].numpy()
 
                 # Vùng Ground-Truth che khuất và diện tích
-                occ_gt_i = np.clip(t.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                if ds_name == "kins":
+                    # KINS: dùng trực tiếp ground truth occluded mask từ DataLoader (đồng bộ với evaluate_kins_row7.py)
+                    occ_gt_i = occ_gt[i, 0].numpy().astype(np.uint8)
+                else:
+                    occ_gt_i = np.clip(t.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+
                 occ_pixels_gt = int(np.sum(occ_gt_i))
                 amodal_pixels_gt = int(np.sum(t))
                 vis_pixels_gt = int(np.sum(v))
@@ -464,17 +480,35 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
                 occ_iou_z = None
                 occ_iou_n = None
                 if has_occ:
-                    occ_pred_l = np.clip(p_l.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
-                    uo_l = np.sum((occ_pred_l == 1) | (occ_gt_i == 1))
-                    occ_iou_l = float(np.sum((occ_pred_l == 1) & (occ_gt_i == 1)) / uo_l) if uo_l > 0 else 0.0
+                    if ds_name == "kins":
+                        # CÔNG THỨC CHUẨN KINS ĐỒNG BỘ 100% VỚI evaluate_kins_row7.py & train_kins.ipynb:
+                        # occ_intersection = (pred_masks * targets * occluded).sum()
+                        # occ_union = (pred_masks * occluded).sum() + (targets * occluded).sum() - occ_intersection
+                        # occ_batch_iou = (occ_intersection + 1e-6) / (occ_union + 1e-6)
+                        inter_l = np.sum(p_l * t * occ_gt_i)
+                        union_l = np.sum(p_l * occ_gt_i) + np.sum(t * occ_gt_i) - inter_l
+                        occ_iou_l = float((inter_l + 1e-6) / (union_l + 1e-6))
 
-                    occ_pred_z = np.clip(p_z.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
-                    uo_z = np.sum((occ_pred_z == 1) | (occ_gt_i == 1))
-                    occ_iou_z = float(np.sum((occ_pred_z == 1) & (occ_gt_i == 1)) / uo_z) if uo_z > 0 else 0.0
+                        inter_z = np.sum(p_z * t * occ_gt_i)
+                        union_z = np.sum(p_z * occ_gt_i) + np.sum(t * occ_gt_i) - inter_z
+                        occ_iou_z = float((inter_z + 1e-6) / (union_z + 1e-6))
 
-                    occ_pred_n = np.clip(p_n.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
-                    uo_n = np.sum((occ_pred_n == 1) | (occ_gt_i == 1))
-                    occ_iou_n = float(np.sum((occ_pred_n == 1) & (occ_gt_i == 1)) / uo_n) if uo_n > 0 else 0.0
+                        inter_n = np.sum(p_n * t * occ_gt_i)
+                        union_n = np.sum(p_n * occ_gt_i) + np.sum(t * occ_gt_i) - inter_n
+                        occ_iou_n = float((inter_n + 1e-6) / (union_n + 1e-6))
+                    else:
+                        # Invisible IoU cho D2SA và COCOA (đồng bộ với evaluate_d2sa.py & evaluate.py):
+                        occ_pred_l = np.clip(p_l.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                        uo_l = np.sum((occ_pred_l == 1) | (occ_gt_i == 1))
+                        occ_iou_l = float(np.sum((occ_pred_l == 1) & (occ_gt_i == 1)) / uo_l) if uo_l > 0 else 0.0
+
+                        occ_pred_z = np.clip(p_z.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                        uo_z = np.sum((occ_pred_z == 1) | (occ_gt_i == 1))
+                        occ_iou_z = float(np.sum((occ_pred_z == 1) & (occ_gt_i == 1)) / uo_z) if uo_z > 0 else 0.0
+
+                        occ_pred_n = np.clip(p_n.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                        uo_n = np.sum((occ_pred_n == 1) | (occ_gt_i == 1))
+                        occ_iou_n = float(np.sum((occ_pred_n == 1) & (occ_gt_i == 1)) / uo_n) if uo_n > 0 else 0.0
 
                 # Tính toán OAR (Occlusion Activation Ratio)
                 oar_bot = None
@@ -1150,6 +1184,39 @@ def run_diagnostics(args):
             print(f"💾 Đã lưu cache kết quả {d_name.upper()} tại: {cache_path}")
         except Exception as e:
             print(f"⚠️ Không thể lưu cache cho {d_name}: {e}")
+
+    # Tự động nạp cache của các dataset khác nếu đã tồn tại trên đĩa (tránh phải chạy lại các dataset đã hoàn thành)
+    for existing_d in ["cocoa", "d2sa", "kins"]:
+        if existing_d not in all_results:
+            d_cache_file = os.path.join(args.output_dir, f"cache_{existing_d}.json")
+            if os.path.exists(d_cache_file):
+                try:
+                    with open(d_cache_file, "r", encoding="utf-8") as f:
+                        all_results[existing_d] = json.load(f)
+                    print(f"📦 Đã tự động nạp cache sẵn có của {existing_d.upper()} từ: {d_cache_file}")
+
+                    # Nạp visual samples nếu có
+                    vis_file = os.path.join(args.output_dir, f"cache_{existing_d}_vis.npz")
+                    if os.path.exists(vis_file) and existing_d not in dataset_visual_samples:
+                        vis_npz = np.load(vis_file)
+                        meta_list = json.loads(str(vis_npz["meta"]))
+                        ds_vis = []
+                        for idx, m in enumerate(meta_list):
+                            ds_vis.append({
+                                "dataset": existing_d,
+                                "rgb": vis_npz[f"rgb_{idx}"],
+                                "vis_mask": vis_npz[f"vis_{idx}"],
+                                "occ_gt": vis_npz[f"occ_{idx}"],
+                                "pred_mask": vis_npz[f"pred_{idx}"],
+                                "a_bot": vis_npz[f"abot_{idx}"],
+                                "a_dec": vis_npz[f"adec_{idx}"],
+                                "r_occ": m["r_occ"],
+                                "oar_bot": m["oar_bot"],
+                                "oar_dec": m["oar_dec"]
+                            })
+                        dataset_visual_samples[existing_d] = ds_vis
+                except Exception as e:
+                    print(f"⚠️ Lỗi đọc cache {existing_d}: {e}")
 
     # Nếu chạy local test mà không có đủ cả 3 dataset, bổ sung dữ liệu giả định chuẩn mực cho dataset thiếu để vẽ hình
     for missing_d, def_alpha in [("cocoa", -0.0501), ("kins", 0.0517), ("d2sa", 0.1201)]:
