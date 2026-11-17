@@ -452,12 +452,8 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
                 p_z = preds_zero[i, 0].numpy()
                 p_n = preds_neg[i, 0].numpy()
 
-                # Vùng Ground-Truth che khuất và diện tích
-                if ds_name == "kins":
-                    # KINS: dùng trực tiếp ground truth occluded mask từ DataLoader (đồng bộ với evaluate_kins_row7.py)
-                    occ_gt_i = occ_gt[i, 0].numpy().astype(np.uint8)
-                else:
-                    occ_gt_i = np.clip(t.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                # Vùng Ground-Truth che khuất và diện tích (Chuẩn Công thức 1 MAPR đồng bộ cho COCOA, D2SA và KINS)
+                occ_gt_i = np.clip(t.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
 
                 occ_pixels_gt = int(np.sum(occ_gt_i))
                 amodal_pixels_gt = int(np.sum(t))
@@ -475,40 +471,22 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
                 u_n = np.sum((p_n == 1) | (t == 1))
                 iou_n = float(np.sum((p_n == 1) & (t == 1)) / u_n) if u_n > 0 else 1.0
 
-                # Occluded IoUs cho cả 3 chế độ
+                # Occluded IoUs cho cả 3 chế độ (Chuẩn Công thức 1 MAPR - Invisible mIoU cho cả COCOA, D2SA, KINS)
                 occ_iou_l = None
                 occ_iou_z = None
                 occ_iou_n = None
                 if has_occ:
-                    if ds_name == "kins":
-                        # CÔNG THỨC CHUẨN KINS ĐỒNG BỘ 100% VỚI evaluate_kins_row7.py & train_kins.ipynb:
-                        # occ_intersection = (pred_masks * targets * occluded).sum()
-                        # occ_union = (pred_masks * occluded).sum() + (targets * occluded).sum() - occ_intersection
-                        # occ_batch_iou = (occ_intersection + 1e-6) / (occ_union + 1e-6)
-                        inter_l = np.sum(p_l * t * occ_gt_i)
-                        union_l = np.sum(p_l * occ_gt_i) + np.sum(t * occ_gt_i) - inter_l
-                        occ_iou_l = float((inter_l + 1e-6) / (union_l + 1e-6))
+                    occ_pred_l = np.clip(p_l.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                    uo_l = np.sum((occ_pred_l == 1) | (occ_gt_i == 1))
+                    occ_iou_l = float(np.sum((occ_pred_l == 1) & (occ_gt_i == 1)) / uo_l) if uo_l > 0 else 0.0
 
-                        inter_z = np.sum(p_z * t * occ_gt_i)
-                        union_z = np.sum(p_z * occ_gt_i) + np.sum(t * occ_gt_i) - inter_z
-                        occ_iou_z = float((inter_z + 1e-6) / (union_z + 1e-6))
+                    occ_pred_z = np.clip(p_z.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                    uo_z = np.sum((occ_pred_z == 1) | (occ_gt_i == 1))
+                    occ_iou_z = float(np.sum((occ_pred_z == 1) & (occ_gt_i == 1)) / uo_z) if uo_z > 0 else 0.0
 
-                        inter_n = np.sum(p_n * t * occ_gt_i)
-                        union_n = np.sum(p_n * occ_gt_i) + np.sum(t * occ_gt_i) - inter_n
-                        occ_iou_n = float((inter_n + 1e-6) / (union_n + 1e-6))
-                    else:
-                        # Invisible IoU cho D2SA và COCOA (đồng bộ với evaluate_d2sa.py & evaluate.py):
-                        occ_pred_l = np.clip(p_l.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
-                        uo_l = np.sum((occ_pred_l == 1) | (occ_gt_i == 1))
-                        occ_iou_l = float(np.sum((occ_pred_l == 1) & (occ_gt_i == 1)) / uo_l) if uo_l > 0 else 0.0
-
-                        occ_pred_z = np.clip(p_z.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
-                        uo_z = np.sum((occ_pred_z == 1) | (occ_gt_i == 1))
-                        occ_iou_z = float(np.sum((occ_pred_z == 1) & (occ_gt_i == 1)) / uo_z) if uo_z > 0 else 0.0
-
-                        occ_pred_n = np.clip(p_n.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
-                        uo_n = np.sum((occ_pred_n == 1) | (occ_gt_i == 1))
-                        occ_iou_n = float(np.sum((occ_pred_n == 1) & (occ_gt_i == 1)) / uo_n) if uo_n > 0 else 0.0
+                    occ_pred_n = np.clip(p_n.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
+                    uo_n = np.sum((occ_pred_n == 1) | (occ_gt_i == 1))
+                    occ_iou_n = float(np.sum((occ_pred_n == 1) & (occ_gt_i == 1)) / uo_n) if uo_n > 0 else 0.0
 
                 # Tính toán OAR (Occlusion Activation Ratio)
                 oar_bot = None
@@ -1295,7 +1273,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=64, help="Kích thước batch (mặc định: 64)")
     parser.add_argument("--num-workers", type=int, default=2, help="Số luồng worker cho DataLoader (mặc định: 2)")
     parser.add_argument("--max-samples", type=int, default=2000,
-                        help="Giới hạn số mẫu đánh giá (mặc định: 2000, truyền 0 để đánh giá toàn bộ 100%)")
+                        help="Giới hạn số mẫu đánh giá (mặc định: 2000, truyền 0 để đánh giá toàn bộ 100%%)")
     parser.add_argument("--output-dir", type=str, default="results/diagnostics", help="Thư mục xuất báo cáo và đồ thị")
     parser.add_argument("--drive-dir", type=str, default="/content/drive/MyDrive/amodal_shape_prediction",
                         help="Thư mục gốc lưu trữ trên Google Drive")
