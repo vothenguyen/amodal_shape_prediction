@@ -245,10 +245,14 @@ class AmodalDataset(Dataset):
             visible_mask = transformed["masks"][1]
 
         # ──────────────────────────────────────────────────────────────────
-        # BƯỚC 6: CHUYỂN ĐỔI TỪ NUMPY → PYTORCH TENSOR
+        # BƯỚC 6: CHUYỂN ĐỔI TỪ NUMPY → PYTORCH TENSOR & CHUẨN HÓA IMAGENET
         # ──────────────────────────────────────────────────────────────────
         if not isinstance(image, torch.Tensor):
-            image_tensor = torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
+            image = image.astype(np.float32) / 255.0
+            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+            std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+            image = (image - mean) / std
+            image_tensor = torch.from_numpy(image.transpose(2, 0, 1)).float()
         else:
             image_tensor = image
 

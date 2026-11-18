@@ -198,8 +198,8 @@ class AmodalDatasetD2SA(Dataset):
         # Edge mask = biên của visible mask (dilation - erosion)
         # Giống hệt COCOA dataset
         visible_uint8 = (visible_mask * 255).astype(np.uint8)
-        # Kernel 5×5 để tìm cạnh
-        kernel = np.ones((5, 5), np.uint8)
+        # Kernel 3×3 để tìm cạnh theo chuẩn D2SA
+        kernel = np.ones((3, 3), np.uint8)
         # Dilation: thêm white pixels xung quanh ranh giới
         dilation = cv2.dilate(visible_uint8, kernel, iterations=1)
         # Erosion: bớt white pixels từ ranh giới

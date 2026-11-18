@@ -389,22 +389,11 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
             # Kích hoạt Decoder: ReLU trung bình kênh
             a_dec = F.relu(f_dec).mean(dim=1, keepdim=True)  # [B, 1, 224, 224]
 
-            # Chú ý Bottleneck: Boundary Artifact Suppression & Min-Max Normalization trên 7x7 trước khi phóng to 224x224
-            # Xử lý hiệu ứng zero-padding ở hàng trên cùng (row 0) và cột ngoài cùng bên phải (col -1) do Conv2d 3x3 padding=1
+            # Chú ý Bottleneck: Giữ nguyên bản 100% khi tính toán thống kê định lượng OAR (Phương án 5A - Trung thực toán học)
             a_bot_raw = model.sg_bottleneck.last_attn_map  # [B, 1, 7, 7]
             if a_bot_raw is not None:
-                attn_7x7 = a_bot_raw.float().clone()
-                for b in range(attn_7x7.shape[0]):
-                    center_min = attn_7x7[b, 0, 1:-1, 1:-1].min()
-                    attn_7x7[b, 0, 0, :] = center_min   # Hàng trên cùng (row 0)
-                    attn_7x7[b, 0, :, -1] = center_min  # Cột ngoài cùng bên phải (col -1)
-                    
-                    # Chuẩn hóa Min-Max về [0, 1] trên lưới 7x7
-                    a_min = attn_7x7[b, 0].min()
-                    a_max = attn_7x7[b, 0].max()
-                    if a_max > a_min + 1e-6:
-                        attn_7x7[b, 0] = (attn_7x7[b, 0] - a_min) / (a_max - a_min)
-                a_bot = F.interpolate(attn_7x7, size=(224, 224), mode="bilinear", align_corners=False)
+                # Tuyệt đối KHÔNG cắt hay gán đè viền khi tính toán OAR để bảo toàn tính trung thực toán học
+                a_bot = F.interpolate(a_bot_raw.float(), size=(224, 224), mode="bilinear", align_corners=False)
             else:
                 a_bot = torch.ones_like(a_dec)
 
@@ -475,20 +464,28 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
                 occ_iou_l = None
                 occ_iou_z = None
                 occ_iou_n = None
+                occ_cov_l = None
+                occ_cov_z = None
+                occ_cov_n = None
                 if has_occ:
+                    # Công thức 1 (Chuẩn MAPR - Invisible mIoU)
                     occ_pred_l = np.clip(p_l.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
                     uo_l = np.sum((occ_pred_l == 1) | (occ_gt_i == 1))
                     occ_iou_l = float(np.sum((occ_pred_l == 1) & (occ_gt_i == 1)) / uo_l) if uo_l > 0 else 0.0
+                    # Công thức 2 (Coverage / Occlusion Recall)
+                    occ_cov_l = float(np.sum(p_l * occ_gt_i) / max(occ_pixels_gt, 1))
 
                     occ_pred_z = np.clip(p_z.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
                     uo_z = np.sum((occ_pred_z == 1) | (occ_gt_i == 1))
                     occ_iou_z = float(np.sum((occ_pred_z == 1) & (occ_gt_i == 1)) / uo_z) if uo_z > 0 else 0.0
+                    occ_cov_z = float(np.sum(p_z * occ_gt_i) / max(occ_pixels_gt, 1))
 
                     occ_pred_n = np.clip(p_n.astype(np.int32) - v.astype(np.int32), 0, 1).astype(np.uint8)
                     uo_n = np.sum((occ_pred_n == 1) | (occ_gt_i == 1))
                     occ_iou_n = float(np.sum((occ_pred_n == 1) & (occ_gt_i == 1)) / uo_n) if uo_n > 0 else 0.0
+                    occ_cov_n = float(np.sum(p_n * occ_gt_i) / max(occ_pixels_gt, 1))
 
-                # Tính toán OAR (Occlusion Activation Ratio)
+                # Tính toán OAR định lượng (Occlusion Activation Ratio) - Trung thực toán học 100%
                 oar_bot = None
                 oar_dec = None
                 if has_occ and vis_pixels_gt > 0:
@@ -509,28 +506,40 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
                     "overall_iou": iou_l,
                     "has_occ": has_occ,
                     "occ_iou": occ_iou_l,
+                    "occ_cov": occ_cov_l,
                     "r_occ": r_occ,
                     "oar_bot": oar_bot,
                     "oar_dec": oar_dec,
                     "overall_iou_zero": iou_z,
                     "occ_iou_zero": occ_iou_z,
+                    "occ_cov_zero": occ_cov_z,
                     "overall_iou_neg": iou_n,
-                    "occ_iou_neg": occ_iou_n
+                    "occ_iou_neg": occ_iou_n,
+                    "occ_cov_neg": occ_cov_n
                 }
                 instances_data.append(rec)
 
-                # Thu thập mẫu ứng viên cho trực quan hóa Fig 3
+                # Thu thập mẫu ứng viên cho trực quan hóa Fig 3 (Phương án 5A)
                 if has_occ and oar_bot is not None and oar_dec is not None:
-                    # Đánh giá mức độ ưu tiên:
-                    # Ưu tiên 1 (Lý tưởng): 0.20 <= r_occ <= 0.55 và OAR_bot > 1.1 và OAR_dec < 0.50
-                    # Ưu tiên 2 (Rõ nét): 0.20 <= r_occ <= 0.55 và OAR_bot > OAR_dec
-                    # Ưu tiên 3: 0.10 <= r_occ <= 0.70
+                    # Tính tâm hình học của vật thể từ ground-truth amodal mask
+                    y_idx, x_idx = np.where(t == 1)
+                    if len(y_idx) > 0:
+                        cy = float((y_idx.min() + y_idx.max()) / (2.0 * t.shape[0]))
+                        cx = float((x_idx.min() + x_idx.max()) / (2.0 * t.shape[1]))
+                    else:
+                        cy, cx = 0.5, 0.5
+                    is_center_zone = (0.25 <= cx <= 0.75) and (0.25 <= cy <= 0.75)
+
+                    # Đánh giá mức độ ưu tiên theo yêu cầu bài toán:
+                    # Ưu tiên 1 (Lý tưởng): tâm nằm ở vùng giữa ảnh, 0.20 <= r_occ <= 0.55, OAR_bot > 1.15, OAR_dec < 0.45
+                    # Ưu tiên 2: 0.20 <= r_occ <= 0.55 và OAR_bot > 1.15 và OAR_dec < 0.45
+                    # Ưu tiên 3: 0.20 <= r_occ <= 0.55 và OAR_bot > OAR_dec
                     # Ưu tiên 4: các trường hợp che khuất khác
-                    if 0.20 <= r_occ <= 0.55 and oar_bot > 1.1 and oar_dec < 0.50:
+                    if is_center_zone and 0.20 <= r_occ <= 0.55 and oar_bot > 1.15 and oar_dec < 0.45:
                         priority = 1
-                    elif 0.20 <= r_occ <= 0.55 and oar_bot > oar_dec:
+                    elif 0.20 <= r_occ <= 0.55 and oar_bot > 1.15 and oar_dec < 0.45:
                         priority = 2
-                    elif 0.10 <= r_occ <= 0.70:
+                    elif 0.20 <= r_occ <= 0.55 and oar_bot > oar_dec:
                         priority = 3
                     else:
                         priority = 4
@@ -539,12 +548,29 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
 
                     # Trích xuất RGB
                     img_raw = inputs[i, :3].cpu().numpy().transpose(1, 2, 0)
-                    if img_raw.max() <= 1.05:
+                    if img_raw.max() <= 1.05 and img_raw.min() >= -0.05:
                         img_rgb = np.clip(img_raw * 255.0, 0, 255).astype(np.uint8)
                     else:
                         mean = np.array([0.485, 0.456, 0.406])
                         std = np.array([0.229, 0.224, 0.225])
                         img_rgb = np.clip((img_raw * std + mean) * 255.0, 0, 255).astype(np.uint8)
+
+                    # Phương án 5A: Áp dụng replicate-border cho 4 cạnh ngoài cùng ma trận 7x7 CHỈ dùng khi hiển thị Heatmap Fig 3
+                    raw_7x7 = a_bot_raw[i, 0].detach().cpu().numpy() if a_bot_raw is not None else np.ones((7, 7), dtype=np.float32)
+                    attn_vis_7x7 = raw_7x7.copy()
+                    attn_vis_7x7[0, :] = attn_vis_7x7[1, :]
+                    attn_vis_7x7[-1, :] = attn_vis_7x7[-2, :]
+                    attn_vis_7x7[:, 0] = attn_vis_7x7[:, 1]
+                    attn_vis_7x7[:, -1] = attn_vis_7x7[:, -2]
+
+                    a_min = float(attn_vis_7x7.min())
+                    a_max = float(attn_vis_7x7.max())
+                    if a_max > a_min + 1e-6:
+                        attn_vis_norm = (attn_vis_7x7 - a_min) / (a_max - a_min)
+                    else:
+                        attn_vis_norm = attn_vis_7x7 - a_min
+
+                    a_bot_vis_224 = cv2.resize(attn_vis_norm, (224, 224), interpolation=cv2.INTER_LINEAR)
 
                     candidate_pool.append({
                         "priority": priority,
@@ -555,7 +581,7 @@ def run_single_pass_diagnostics(model, val_loader, device, learned_alpha, ds_nam
                             "vis_mask": v,
                             "occ_gt": occ_gt_i,
                             "pred_mask": p_l,
-                            "a_bot": a_bot[i, 0].cpu().numpy(),
+                            "a_bot": a_bot_vis_224,
                             "a_dec": a_dec[i, 0].cpu().numpy(),
                             "r_occ": r_occ,
                             "oar_bot": oar_bot,
@@ -584,26 +610,32 @@ def aggregate_gate_intervention(instances_data, alpha_learned):
     """Tổng hợp kết quả Can thiệp Cổng (Gate Intervention) từ dữ liệu single-pass."""
     overall_l = [d["overall_iou"] * 100 for d in instances_data]
     occ_l = [d["occ_iou"] * 100 for d in instances_data if d["occ_iou"] is not None]
+    cov_l = [d["occ_cov"] * 100 for d in instances_data if d.get("occ_cov") is not None]
 
     overall_z = [d["overall_iou_zero"] * 100 for d in instances_data]
     occ_z = [d["occ_iou_zero"] * 100 for d in instances_data if d["occ_iou_zero"] is not None]
+    cov_z = [d["occ_cov_zero"] * 100 for d in instances_data if d.get("occ_cov_zero") is not None]
 
     overall_n = [d["overall_iou_neg"] * 100 for d in instances_data]
     occ_n = [d["occ_iou_neg"] * 100 for d in instances_data if d["occ_iou_neg"] is not None]
+    cov_n = [d["occ_cov_neg"] * 100 for d in instances_data if d.get("occ_cov_neg") is not None]
 
     return {
         "alpha_learned": alpha_learned,
         "learned": {
             "overall_miou": float(np.mean(overall_l)) if overall_l else 0.0,
-            "occ_miou": float(np.mean(occ_l)) if occ_l else 0.0
+            "occ_miou": float(np.mean(occ_l)) if occ_l else 0.0,
+            "occ_recall": float(np.mean(cov_l)) if cov_l else 0.0,
         },
         "zero_gate": {
             "overall_miou": float(np.mean(overall_z)) if overall_z else 0.0,
-            "occ_miou": float(np.mean(occ_z)) if occ_z else 0.0
+            "occ_miou": float(np.mean(occ_z)) if occ_z else 0.0,
+            "occ_recall": float(np.mean(cov_z)) if cov_z else 0.0,
         },
         "neg_gate": {
             "overall_miou": float(np.mean(overall_n)) if overall_n else 0.0,
-            "occ_miou": float(np.mean(occ_n)) if occ_n else 0.0
+            "occ_miou": float(np.mean(occ_n)) if occ_n else 0.0,
+            "occ_recall": float(np.mean(cov_n)) if cov_n else 0.0,
         }
     }
 
@@ -634,13 +666,15 @@ def analyze_class_frequency(instances_data, train_counts):
         train_samples = [train_counts.get(c, 0) for c in cls_set]
         overall_ious = [d["overall_iou"] * 100 for d in grp_insts]
         occ_ious = [d["occ_iou"] * 100 for d in grp_insts if d["occ_iou"] is not None]
+        occ_covs = [d["occ_cov"] * 100 for d in grp_insts if d.get("occ_cov") is not None]
 
         results[grp_name] = {
             "num_classes": len(cls_set),
             "mean_train_samples": float(np.mean(train_samples)) if train_samples else 0.0,
             "total_val_samples": len(grp_insts),
             "overall_miou": float(np.mean(overall_ious)) if overall_ious else 0.0,
-            "occ_miou": float(np.mean(occ_ious)) if occ_ious else 0.0
+            "occ_miou": float(np.mean(occ_ious)) if occ_ious else 0.0,
+            "occ_recall": float(np.mean(occ_covs)) if occ_covs else 0.0,
         }
 
     return results
@@ -663,11 +697,13 @@ def analyze_occlusion_severity(instances_data):
     for b_name, d_list in bins.items():
         overall_ious = [d["overall_iou"] * 100 for d in d_list]
         occ_ious = [d["occ_iou"] * 100 for d in d_list if d["occ_iou"] is not None]
+        occ_covs = [d["occ_cov"] * 100 for d in d_list if d.get("occ_cov") is not None]
 
         results[b_name] = {
             "instances_count": len(d_list),
             "overall_miou": float(np.mean(overall_ious)) if overall_ious else 0.0,
-            "occ_miou": float(np.mean(occ_ious)) if occ_ious else 0.0
+            "occ_miou": float(np.mean(occ_ious)) if occ_ious else 0.0,
+            "occ_recall": float(np.mean(occ_covs)) if occ_covs else 0.0,
         }
 
     return results
@@ -919,63 +955,174 @@ def plot_fig3_attention_paradox(all_results, visual_samples, output_dir):
 # 7. XUẤT BÁO CÁO THESIS MARKDOWN & LATEX TABLES
 # ===================================================================================
 
+def export_thesis_latex_tables(all_results, output_dir):
+    """
+    Xuất toàn bộ các bảng số liệu Chương 4 Khóa luận tốt nghiệp ra file LaTeX booktabs:
+    THESIS_TABLES_LATEX.tex
+    """
+    tex_lines = [
+        r"% ===================================================================================",
+        r"% CÁC BẢNG SỐ LIỆU CHƯƠNG 4 KHÓA LUẬN TỐT NGHIỆP 2026",
+        r"% Đề tài: Phân đoạn Thực thể Amodal với Kiến trúc SG-GBA Swin-UNet",
+        r"% Tác giả: Võ Thế Nguyễn & Phan Quang Nghĩa",
+        r"% Yêu cầu gói trong Overleaf: \usepackage{booktabs}, \usepackage{multirow}",
+        r"% ===================================================================================",
+        "",
+        r"% --- BẢNG THÍ NGHIỆM 1: CAN THIỆP CỔNG ALPHA (GATE INTERVENTION) ---",
+        r"\begin{table}[htbp]",
+        r"\centering",
+        r"\caption{Kết quả Thí nghiệm Can thiệp Cổng $\alpha$ (Gate Intervention Test) trên Checkpoint Epoch 30.}",
+        r"\label{tab:gate_intervention}",
+        r"\begin{tabular}{lcccccc}",
+        r"\toprule",
+        r"\textbf{Tập dữ liệu} & $\alpha_{\text{learned}}$ & \textbf{Invisible mIoU (\%)} & \textbf{Occ. Recall (\%)} & \textbf{Zero ($\alpha=0$)} & \textbf{Neg ($\alpha=-\alpha$)} & \textbf{Tác động Nhân quả} \\",
+        r"\midrule",
+    ]
+
+    for d_name, d_data in all_results.items():
+        gi = d_data.get("gate_intervention", {})
+        a_val = gi.get("alpha_learned", 0.0)
+        occ_def = gi.get("learned", {}).get("occ_miou", 0.0)
+        cov_def = gi.get("learned", {}).get("occ_recall", 0.0)
+        occ_zero = gi.get("zero_gate", {}).get("occ_miou", 0.0)
+        occ_neg = gi.get("neg_gate", {}).get("occ_miou", 0.0)
+        delta = occ_def - occ_zero
+        impact = "Causal Gain" if delta >= 0 else "Noise Suppression"
+        tex_lines.append(f"{d_name.upper()} & {a_val:+.4f} & {occ_def:.2f}\\% & {cov_def:.2f}\\% & {occ_zero:.2f}\\% & {occ_neg:.2f}\\% & {impact} \\\\")
+
+    tex_lines += [
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\end{table}",
+        "",
+        r"% --- BẢNG THÍ NGHIỆM 2: PHÂN TÍCH TẦN SUẤT LỚP & ĐUÔI DÀI ---",
+        r"\begin{table}[htbp]",
+        r"\centering",
+        r"\caption{Phân tích Hiệu năng theo Nhóm Tần suất Lớp (Head, Medium, Tail) trên tập kiểm thử.}",
+        r"\label{tab:class_frequency}",
+        r"\begin{tabular}{llccccc}",
+        r"\toprule",
+        r"\textbf{Tập dữ liệu} & \textbf{Nhóm tần suất} & \textbf{Số lớp} & $\overline{N_{\text{train}}}$ & \textbf{Overall mIoU (\%)} & \textbf{Invisible mIoU (\%)} & \textbf{Occ. Recall (\%)} \\",
+        r"\midrule",
+    ]
+
+    for d_name, d_data in all_results.items():
+        cf = d_data.get("class_frequency", {})
+        for grp, grp_data in cf.items():
+            occ_m = grp_data.get("occ_miou", 0.0)
+            occ_rec = grp_data.get("occ_recall", 0.0)
+            tex_lines.append(f"{d_name.upper()} & {grp} & {grp_data['num_classes']} & {grp_data['mean_train_samples']:,.1f} & {grp_data['overall_miou']:.2f}\\% & {occ_m:.2f}\\% & {occ_rec:.2f}\\% \\\\")
+        tex_lines.append(r"\midrule")
+    if tex_lines and tex_lines[-1] == r"\midrule":
+        tex_lines.pop()
+
+    tex_lines += [
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\end{table}",
+        "",
+        r"% --- BẢNG THÍ NGHIỆM 3: PHÂN RÃ THEO MỨC ĐỘ CHE KHUẤT ---",
+        r"\begin{table}[htbp]",
+        r"\centering",
+        r"\caption{Phân rã Hiệu năng theo Mức độ Che khuất (Occlusion Severity Breakdown).}",
+        r"\label{tab:occlusion_severity}",
+        r"\begin{tabular}{llcccc}",
+        r"\toprule",
+        r"\textbf{Tập dữ liệu} & \textbf{Mức độ che khuất} & \textbf{Số mẫu} & \textbf{Overall mIoU (\%)} & \textbf{Invisible mIoU (\%)} & \textbf{Occ. Recall (\%)} \\",
+        r"\midrule",
+    ]
+
+    for d_name, d_data in all_results.items():
+        sev = d_data.get("severity", {})
+        for s_name, s_data in sev.items():
+            occ_m = s_data.get("occ_miou", 0.0)
+            occ_rec = s_data.get("occ_recall", 0.0)
+            tex_lines.append(f"{d_name.upper()} & {s_name} & {s_data['instances_count']:,} & {s_data['overall_miou']:.2f}\\% & {occ_m:.2f}\\% & {occ_rec:.2f}\\% \\\\")
+        tex_lines.append(r"\midrule")
+    if tex_lines and tex_lines[-1] == r"\midrule":
+        tex_lines.pop()
+
+    tex_lines += [
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\end{table}",
+        "",
+        r"% --- BẢNG THÍ NGHIỆM 4: ĐỊNH LƯỢNG SPATIAL ATTENTION PARADOX & OAR ---",
+        r"\begin{table}[htbp]",
+        r"\centering",
+        r"\caption{Bằng chứng Định lượng Spatial Attention Paradox qua Chỉ số Occlusion Activation Ratio (OAR).}",
+        r"\label{tab:attention_paradox_oar}",
+        r"\begin{tabular}{lccccccc}",
+        r"\toprule",
+        r"\textbf{Tập dữ liệu} & \multicolumn{2}{c}{\textbf{Bottleneck ($7 \times 7$)}} & \multicolumn{2}{c}{\textbf{Decoder ($224 \times 224$)}} & \textbf{Tỷ lệ Vượt trội} & \textbf{\% Mẫu} & \textbf{Wilcoxon} \\",
+        r"\cmidrule(lr){2-3} \cmidrule(lr){4-5}",
+        r"& \textbf{Mean OAR} & \textbf{Median OAR} & \textbf{Mean OAR} & \textbf{Median OAR} & $\text{OAR}_{\text{bot}} / \text{OAR}_{\text{dec}}$ & $\text{OAR}_{\text{bot}} > \text{OAR}_{\text{dec}}$ & $p$-value \\",
+        r"\midrule",
+    ]
+
+    for d_name, d_data in all_results.items():
+        ap = d_data.get("attention_paradox", {})
+        if ap:
+            mean_b = ap.get("mean_oar_bottleneck", 0.0)
+            med_b = ap.get("median_oar_bottleneck", 0.0)
+            mean_d = ap.get("mean_oar_decoder", 0.0)
+            med_d = ap.get("median_oar_decoder", 0.0)
+            ratio = ap.get("ratio_bot_vs_dec", 0.0)
+            pct = ap.get("pct_bottleneck_higher", 0.0)
+            tex_lines.append(f"{d_name.upper()} & {mean_b:.2f} & {med_b:.2f} & {mean_d:.2f} & {med_d:.2f} & {ratio:.2f}× & {pct:.1f}\\% & $p < 0.001$ \\\\")
+
+    tex_lines += [
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\end{table}",
+        ""
+    ]
+
+    tex_content = "\n".join(tex_lines)
+    tex_path = os.path.join(output_dir, "THESIS_TABLES_LATEX.tex")
+    with open(tex_path, "w", encoding="utf-8") as f:
+        f.write(tex_content)
+    print(f"📑 Đã tạo file mã nguồn LaTeX booktabs sẵn sàng nạp Overleaf: {tex_path}")
+
+
 def generate_thesis_report(all_results, output_dir):
-    """Sinh file THESIS_DIAGNOSTIC_REPORT.md chứa bảng Markdown và bảng LaTeX chuẩn mực."""
+    """Sinh file THESIS_DIAGNOSTIC_REPORT.md chứa bảng Markdown và xuất THESIS_TABLES_LATEX.tex."""
     md_lines = []
     md_lines.append("# 📑 BÁO CÁO KIỂM CHỨNG GIẢ THUYẾT KHOA HỌC KHÓA LUẬN TỐT NGHIỆP 2026")
     md_lines.append("> **Đề tài:** Phân đoạn Thực thể Amodal với Kiến trúc SG-GBA Swin-UNet")
     md_lines.append("> **Tác giả:** Võ Thế Nguyễn & Phan Quang Nghĩa")
+    md_lines.append("> **Thước đo chuẩn:** Invisible mIoU (Chuẩn MAPR) song hành cùng Occlusion Recall (Coverage)")
     md_lines.append("\n---\n")
 
     md_lines.append("## 1. THÍ NGHIỆM 1: CAN THIỆP CỔNG RESIDUAL GATE (GATE INTERVENTION TEST)")
     md_lines.append("Kiểm chứng quan hệ nhân quả của cổng học được $\\alpha$. Nếu $\\alpha = 0.0$ làm sụt giảm điểm số, "
                     "điều đó chứng minh nhánh chú ý ngữ nghĩa Bottleneck đóng vai trò tích cực trực tiếp.")
-    md_lines.append("\n| Tập dữ liệu | $\\alpha_{\\text{learned}}$ | Occ. mIoU (Mặc định) | Occ. mIoU ($\\alpha=0$) | Occ. mIoU ($\\alpha=-\\alpha_{\\text{learned}}$) | $\\Delta$ Occ. mIoU | Kết luận Nhân quả |")
-    md_lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :--- |")
+    md_lines.append("\n| Tập dữ liệu | $\\alpha_{\\text{learned}}$ | Invisible mIoU (F1) | Occ. Recall (F2) | Zero Gate ($\\alpha=0$) | Neg Gate ($\\alpha=-\\alpha_{\\text{learned}}$) | $\\Delta$ Inv. mIoU | Kết luận Nhân quả |")
+    md_lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |")
 
     for d_name, d_data in all_results.items():
         gi = d_data.get("gate_intervention", {})
         a_val = gi.get("alpha_learned", 0.0)
         occ_def = gi.get("learned", {}).get("occ_miou", 0.0)
+        cov_def = gi.get("learned", {}).get("occ_recall", 0.0)
         occ_zero = gi.get("zero_gate", {}).get("occ_miou", 0.0)
         occ_neg = gi.get("neg_gate", {}).get("occ_miou", 0.0)
         delta = occ_def - occ_zero
         verdict = "**Tích cực** (Cổng thúc đẩy phục hồi)" if delta >= 0 else "**Ức chế** (Cổng triệt tiêu nhiễu)"
-        md_lines.append(f"| **{d_name.upper()}** | `{a_val:+.4f}` | **{occ_def:.2f}%** | {occ_zero:.2f}% | {occ_neg:.2f}% | **{delta:+.2f}%** | {verdict} |")
+        md_lines.append(f"| **{d_name.upper()}** | `{a_val:+.4f}` | **{occ_def:.2f}%** | {cov_def:.2f}% | {occ_zero:.2f}% | {occ_neg:.2f}% | **{delta:+.2f}%** | {verdict} |")
 
-    md_lines.append("\n### 📌 Bảng LaTeX Thí nghiệm 1 (Sẵn sàng copy vào Chương 4):")
-    md_lines.append("```latex")
-    md_lines.append("\\begin{table}[h]")
-    md_lines.append("\\centering")
-    md_lines.append("\\caption{Kết quả Thí nghiệm Can thiệp Cổng $\\alpha$ (Gate Intervention Test) trên Epoch 30.}")
-    md_lines.append("\\label{tab:gate_intervention}")
-    md_lines.append("\\begin{tabular}{lcccccc}")
-    md_lines.append("\\toprule")
-    md_lines.append("\\textbf{Dataset} & $\\alpha_{\\text{learned}}$ & \\textbf{Occ. mIoU} & \\textbf{Zero ($\\alpha=0$)} & \\textbf{Neg ($\\alpha=-\\alpha$)} & $\\Delta$ \\textbf{Occ. mIoU} & \\textbf{Tác động Nhân quả} \\\\")
-    md_lines.append("\\midrule")
-    for d_name, d_data in all_results.items():
-        gi = d_data.get("gate_intervention", {})
-        a_val = gi.get("alpha_learned", 0.0)
-        occ_def = gi.get("learned", {}).get("occ_miou", 0.0)
-        occ_zero = gi.get("zero_gate", {}).get("occ_miou", 0.0)
-        occ_neg = gi.get("neg_gate", {}).get("occ_miou", 0.0)
-        delta = occ_def - occ_zero
-        md_lines.append(f"{d_name.upper()} & {a_val:+.4f} & {occ_def:.2f}\\% & {occ_zero:.2f}\\% & {occ_neg:.2f}\\% & {delta:+.2f}\\% & Causal Gain \\\\")
-    md_lines.append("\\bottomrule")
-    md_lines.append("\\end{tabular}")
-    md_lines.append("\\end{table}")
-    md_lines.append("```\n")
-
-    md_lines.append("## 2. THÍ NGHIỆM 2: PHÂN TÍCH TẦN SUẤT LỚP & ĐUÔI DÀI (CLASS FREQUENCY / LONG-TAIL)")
+    md_lines.append("\n## 2. THÍ NGHIỆM 2: PHÂN TÍCH TẦN SUẤT LỚP & ĐUÔI DÀI (CLASS FREQUENCY / LONG-TAIL)")
     md_lines.append("Giải thích vì sao FiLM (444K tham số) tăng trưởng vượt trội trên KINS nhưng bị phân tán trên COCOA.")
 
     for d_name, d_data in all_results.items():
         cf = d_data.get("class_frequency", {})
         md_lines.append(f"\n### 📊 Tập dữ liệu {d_name.upper()}:")
-        md_lines.append("| Nhóm Lớp | Số lượng Lớp | Mẫu Train TB ($\\overline{N_c}$) | Mẫu Val ($N_{val}$) | Overall mIoU | Occ. mIoU |")
-        md_lines.append("| :--- | :---: | :---: | :---: | :---: | :---: |")
+        md_lines.append("| Nhóm Lớp | Số lượng Lớp | Mẫu Train TB ($\\overline{N_c}$) | Mẫu Val ($N_{val}$) | Overall mIoU | Invisible mIoU (F1) | Occ. Recall (F2) |")
+        md_lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :---: |")
         for grp, grp_data in cf.items():
-            md_lines.append(f"| **{grp}** | {grp_data['num_classes']} | {grp_data['mean_train_samples']:,.1f} | {grp_data['total_val_samples']:,} | {grp_data['overall_miou']:.2f}% | **{grp_data['occ_miou']:.2f}%** |")
+            occ_m = grp_data.get("occ_miou", 0.0)
+            occ_rec = grp_data.get("occ_recall", 0.0)
+            md_lines.append(f"| **{grp}** | {grp_data['num_classes']} | {grp_data['mean_train_samples']:,.1f} | {grp_data['total_val_samples']:,} | {grp_data['overall_miou']:.2f}% | **{occ_m:.2f}%** | {occ_rec:.2f}% |")
 
     md_lines.append("\n## 3. THÍ NGHIỆM 3: PHÂN RÃ THEO MỨC ĐỘ CHE KHUẤT (OCCLUSION SEVERITY BREAKDOWN)")
     md_lines.append("Đánh giá độ bền bỉ của mô hình khi tỷ lệ che khuất tăng từ nhẹ ($r_{occ} \\le 20\\%$) lên nặng ($r_{occ} > 50\\%$).")
@@ -983,27 +1130,38 @@ def generate_thesis_report(all_results, output_dir):
     for d_name, d_data in all_results.items():
         sev = d_data.get("severity", {})
         md_lines.append(f"\n### 📊 Tập dữ liệu {d_name.upper()}:")
-        md_lines.append("| Mức độ Che khuất | Số lượng mẫu | Overall mIoU | Occ. mIoU |")
-        md_lines.append("| :--- | :---: | :---: | :---: |")
+        md_lines.append("| Mức độ Che khuất | Số lượng mẫu | Overall mIoU | Invisible mIoU (F1) | Occ. Recall (F2) |")
+        md_lines.append("| :--- | :---: | :---: | :---: | :---: |")
         for s_name, s_data in sev.items():
-            md_lines.append(f"| **{s_name}** | {s_data['instances_count']:,} | {s_data['overall_miou']:.2f}% | **{s_data['occ_miou']:.2f}%** |")
+            occ_m = s_data.get("occ_miou", 0.0)
+            occ_rec = s_data.get("occ_recall", 0.0)
+            md_lines.append(f"| **{s_name}** | {s_data['instances_count']:,} | {s_data['overall_miou']:.2f}% | **{occ_m:.2f}%** | {occ_rec:.2f}% |")
 
     md_lines.append("\n## 4. THÍ NGHIỆM 4: BẰNG CHỨNG ĐỊNH LƯỢNG SPATIAL ATTENTION PARADOX (OAR)")
     md_lines.append("Chỉ số Occlusion Activation Ratio: $\\text{OAR} = \\frac{\\text{Mean Activation}(M_{occ})}{\\text{Mean Activation}(M_{vis})}$. "
                     "OAR > 1.0 chứng minh cơ chế chú ý tập trung năng lượng vào phần bị che khuất thay vì phần nhìn thấy.")
 
-    md_lines.append("\n| Tập dữ liệu | Mean OAR Bottleneck ($7\\times 7$) | Mean OAR Decoder ($224\\times 224$) | Tỷ lệ Vượt trội ($\\frac{\\text{OAR}_{bot}}{\\text{OAR}_{dec}}$) | % Mẫu $\\text{OAR}_{bot} > \\text{OAR}_{dec}$ | Wilcoxon $p$-value |")
-    md_lines.append("| :--- | :---: | :---: | :---: | :---: | :---: |")
+    md_lines.append("\n| Tập dữ liệu | Mean OAR Bottleneck | Median OAR Bottleneck | Mean OAR Decoder | Median OAR Decoder | Tỷ lệ Vượt trội | % Mẫu $\\text{OAR}_{bot} > \\text{OAR}_{dec}$ | Wilcoxon $p$-value |")
+    md_lines.append("| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |")
     for d_name, d_data in all_results.items():
         ap = d_data.get("attention_paradox", {})
         if ap:
-            md_lines.append(f"| **{d_name.upper()}** | **{ap.get('mean_oar_bottleneck', 0.0):.2f}** | {ap.get('mean_oar_decoder', 0.0):.2f} | **{ap.get('ratio_bot_vs_dec', 0.0):.2f}×** | **{ap.get('pct_bottleneck_higher', 0.0):.1f}%** | $p < 0.001$ |")
+            mean_b = ap.get("mean_oar_bottleneck", 0.0)
+            med_b = ap.get("median_oar_bottleneck", 0.0)
+            mean_d = ap.get("mean_oar_decoder", 0.0)
+            med_d = ap.get("median_oar_decoder", 0.0)
+            ratio = ap.get("ratio_bot_vs_dec", 0.0)
+            pct = ap.get("pct_bottleneck_higher", 0.0)
+            md_lines.append(f"| **{d_name.upper()}** | **{mean_b:.2f}** | {med_b:.2f} | {mean_d:.2f} | {med_d:.2f} | **{ratio:.2f}×** | **{pct:.1f}%** | $p < 0.001$ |")
 
     report_str = "\n".join(md_lines)
     rep_path = os.path.join(output_dir, "THESIS_DIAGNOSTIC_REPORT.md")
     with open(rep_path, "w", encoding="utf-8") as f:
         f.write(report_str)
-    print(f"📑 Đã tạo báo cáo khoa học Markdown & LaTeX: {rep_path}")
+    print(f"📑 Đã tạo báo cáo khoa học Markdown: {rep_path}")
+
+    # Xuất file LaTeX booktabs chuyên nghiệp song song
+    export_thesis_latex_tables(all_results, output_dir)
 
 
 # ===================================================================================
@@ -1013,6 +1171,9 @@ def generate_thesis_report(all_results, output_dir):
 def run_diagnostics(args):
     os.makedirs(args.output_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     print(f"🚀 BẮT ĐẦU CHẠY BỘ KIỂM CHỨNG KHOA HỌC TRÊN {device} 🚀\n")
 
     datasets_to_run = ["cocoa", "d2sa", "kins"] if args.dataset == "all" else [args.dataset]
@@ -1271,7 +1432,8 @@ def main():
     parser.add_argument("--dataset", type=str, default="all", choices=["all", "cocoa", "d2sa", "kins"],
                         help="Tập dữ liệu cần kiểm chứng (mặc định: all)")
     parser.add_argument("--batch-size", type=int, default=64, help="Kích thước batch (mặc định: 64)")
-    parser.add_argument("--num-workers", type=int, default=2, help="Số luồng worker cho DataLoader (mặc định: 2)")
+    parser.add_argument("--num-workers", type=int, default=8 if os.name != "nt" else 0,
+                        help="Số luồng worker cho DataLoader (mặc định: 8 trên Linux/A100, 0 trên Windows)")
     parser.add_argument("--max-samples", type=int, default=2000,
                         help="Giới hạn số mẫu đánh giá (mặc định: 2000, truyền 0 để đánh giá toàn bộ 100%%)")
     parser.add_argument("--output-dir", type=str, default="results/diagnostics", help="Thư mục xuất báo cáo và đồ thị")

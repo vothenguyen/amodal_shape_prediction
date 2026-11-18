@@ -101,6 +101,7 @@ def evaluate_single_checkpoint(model, loader, device, threshold=0.5, desc="Evalu
     Tính toán trên GPU tensor theo batch để đạt tốc độ tối đa.
     """
     ious = []
+    dices = []
     precisions = []
     recalls = []
     inv_ious = []
@@ -129,12 +130,16 @@ def evaluate_single_checkpoint(model, loader, device, threshold=0.5, desc="Evalu
             fp = (preds * (1.0 - targets_gpu)).sum(dim=(1, 2, 3))
             fn = ((1.0 - preds) * targets_gpu).sum(dim=(1, 2, 3))
             union = tp + fp + fn
+            pred_sum = preds.sum(dim=(1, 2, 3))
+            tgt_sum = targets_gpu.sum(dim=(1, 2, 3))
 
             batch_iou = torch.where(union > 0, tp / union, torch.tensor(1.0, device=device))
+            batch_dice = torch.where((pred_sum + tgt_sum) > 0, (2.0 * tp) / (pred_sum + tgt_sum), torch.tensor(1.0, device=device))
             batch_prec = torch.where((tp + fp) > 0, tp / (tp + fp), torch.tensor(0.0, device=device))
             batch_rec = torch.where((tp + fn) > 0, tp / (tp + fn), torch.tensor(0.0, device=device))
 
             ious.extend(batch_iou.cpu().tolist())
+            dices.extend(batch_dice.cpu().tolist())
             precisions.extend(batch_prec.cpu().tolist())
             recalls.extend(batch_rec.cpu().tolist())
 
@@ -168,6 +173,7 @@ def evaluate_single_checkpoint(model, loader, device, threshold=0.5, desc="Evalu
         "total_instances": len(ious),
         "occluded_instances": len(inv_ious),
         "overall_miou": float(np.mean(ious) * 100) if ious else 0.0,
+        "dice": float(np.mean(dices) * 100) if dices else 0.0,
         "invisible_miou": float(np.mean(inv_ious) * 100) if inv_ious else 0.0,
         "occlusion_recall": float(np.mean(occ_recalls) * 100) if occ_recalls else 0.0,
         "precision": float(np.mean(precisions) * 100) if precisions else 0.0,
@@ -180,8 +186,8 @@ def evaluate_single_checkpoint(model, loader, device, threshold=0.5, desc="Evalu
 def build_markdown_table(records):
     """Tạo bảng so sánh kết quả dạng Markdown chuyên nghiệp."""
     lines = [
-        "| Checkpoint | Kiến trúc | Tham số | Cổng $\\alpha$ | Tổng mẫu | Mẫu che khuất | Overall mIoU (%) | Invisible mIoU (F1) (%) | Occlusion Recall (F2) (%) | Precision (%) | Recall (%) |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Checkpoint | Kiến trúc | Tham số | Cổng $\\alpha$ | Tổng mẫu | Mẫu che khuất | Overall mIoU (%) | Dice (%) | Invisible mIoU (F1) (%) | Occlusion Recall (F2) (%) | Precision (%) | Recall (%) |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in records:
         ckpt_name = os.path.basename(r["checkpoint"])
@@ -189,7 +195,7 @@ def build_markdown_table(records):
         lines.append(
             f"| `{ckpt_name}` | {r['model_type']} | {r['total_params']:,} | {gate_str} | "
             f"{r['total_instances']:,} | {r['occluded_instances']:,} | "
-            f"**{r['overall_miou']:.2f}%** | **{r['invisible_miou']:.2f}%** | "
+            f"**{r['overall_miou']:.2f}%** | {r.get('dice', 0.0):.2f}% | **{r['invisible_miou']:.2f}%** | "
             f"{r['occlusion_recall']:.2f}% | {r['precision']:.2f}% | {r['recall']:.2f}% |"
         )
     return "\n".join(lines)
@@ -222,9 +228,14 @@ def main():
     else:
         device = torch.device(args.device)
 
+    # Tối ưu hóa A100 / GPU Ampere+
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
     # Worker
     if args.num_workers < 0:
-        num_workers = 0 if os.name == "nt" else 2
+        num_workers = 0 if os.name == "nt" else 8
     else:
         num_workers = args.num_workers
 
@@ -387,3 +398,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
